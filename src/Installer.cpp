@@ -5,6 +5,7 @@
 #include "Extract.h"
 #include "Unpacker.h"
 
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -228,7 +229,17 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         //    clearly named (and sits alongside any DATA-Backup-* siblings).
         //    Best-effort: if the name is already taken or the folder is briefly
         //    in use, the install still succeeded in place.
-        if (data.filename() != "DATA-mctde") {
+        //
+        //    Skip this for Steam installs: Steam's own library button launches
+        //    ...\DATA\DARKSOULS.exe, so renaming DATA would break it. Steam copies
+        //    keep the DATA name (detected the same way the rest of the app does —
+        //    a "steamapps" segment in the path).
+        std::string low = dataDir;
+        for (char& c : low) c = (char)std::tolower((unsigned char)c);
+        bool isSteam = low.find("steamapps") != std::string::npos;
+        if (isSteam) {
+            step("Steam install: keeping the DATA folder name.", 100);
+        } else if (data.filename() != "DATA-mctde") {
             std::error_code ec;
             fs::path target = parent / "DATA-mctde";
             if (fs::exists(target, ec)) {
