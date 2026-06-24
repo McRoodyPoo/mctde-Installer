@@ -139,6 +139,21 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (cmd == "backup") {
+            // backup <dataDir> <destRoot> <packed|unpacked|both>
+            if (argc < 5) { std::printf("usage: backup <dataDir> <destRoot> <packed|unpacked|both>\n"); return 1; }
+            BackupOptions opts;
+            std::string mode = argv[4];
+            opts.packed   = (mode == "packed"   || mode == "both");
+            opts.unpacked = (mode == "unpacked" || mode == "both");
+            opts.destRoot = argv[3];
+            std::string msg;
+            bool ok = runBackups(argv[2], opts, msg,
+                [](const std::string& s, int) { std::printf("  %s\n", s.c_str()); });
+            std::printf("%s: %s\n", ok ? "ok" : "FAIL", msg.c_str());
+            return ok ? 0 : 2;
+        }
+
         if (cmd == "fullinstall") {
             if (argc < 3) { std::printf("usage: fullinstall <dataDir> [namelist]\n"); return 1; }
             std::string namelist = argc >= 4 ? argv[3] : "";  // "" -> embedded namelist

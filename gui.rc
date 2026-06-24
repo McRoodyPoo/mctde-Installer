@@ -26,8 +26,8 @@ BEGIN
             VALUE "CompanyName",      "mctde"
             VALUE "FileDescription",  "mctde Mod Installer for Dark Souls PTDE"
             VALUE "FileVersion",      "0.1.0.0"
-            VALUE "InternalName",     "mctde-installer"
-            VALUE "OriginalFilename", "mctde-installer.exe"
+            VALUE "InternalName",     "mctde-Installer"
+            VALUE "OriginalFilename", "mctde-Installer.exe"
             VALUE "ProductName",      "mctde Installer"
             VALUE "ProductVersion",   "0.1.0.0"
         END

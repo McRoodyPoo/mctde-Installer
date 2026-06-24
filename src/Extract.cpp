@@ -1,6 +1,7 @@
 #include "Extract.h"
 #include "miniz.h"
 
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 
@@ -76,6 +77,12 @@ ExtractStats extractZip(const std::string& zipPath, const std::string& outDir,
             continue;
         }
         if (out.has_parent_path()) fs::create_directories(out.parent_path(), ec);
+
+        // Preserve an existing dsfix.ini — never clobber the user's DSFix settings.
+        std::string base = out.filename().string();
+        for (char& c : base) c = char(std::tolower((unsigned char)c));
+        if (base == "dsfix.ini" && fs::exists(out, ec)) { ++st.files; continue; }
+
         if (!mz_zip_reader_extract_to_file(&zip, i, out.string().c_str(), 0)) {
             ++st.errors;
             continue;

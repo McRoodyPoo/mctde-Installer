@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <commctrl.h>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@ using namespace mctde;
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "comctl32.lib")
 
 // ---- control / message ids ----
 #define IDC_LIST      1000
@@ -65,6 +67,8 @@ static volatile bool g_scanning = false;
 static bool      g_done = false;
 static std::vector<GameInstall> g_installs;
 static std::string g_selDir;   // the install the worker is operating on
+static bool g_doBackup = false;
+static BackupOptions g_backupOpts;
 
 static std::wstring widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -100,6 +104,15 @@ static DWORD WINAPI ScanThread(LPVOID) {
 
 static DWORD WINAPI InstallThread(LPVOID) {
     std::string msg;
+    if (g_doBackup) {
+        if (!runBackups(g_selDir, g_backupOpts, msg,
+                        [](const std::string& s, int p) { postStatus(p, widen(s)); })) {
+            PostMessageW(g_hwnd, WM_DONE, 0,
+                         (LPARAM)dupw(widen("Backup failed: " + msg + "  (install aborted)")));
+            g_installing = false;
+            return 0;
+        }
+    }
     InstallResult r = fullInstall(g_selDir, "", msg,   // "" -> embedded namelist
         [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); });
     PostMessageW(g_hwnd, WM_DONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
@@ -124,6 +137,69 @@ static std::string browseForData(HWND owner) {
     MessageBoxW(owner, L"That folder doesn't contain DARKSOULS.exe.", L"mctde Installer",
                 MB_OK | MB_ICONWARNING);
     return "";
+}
+
+enum class BackupChoice { Cancel, NoBackup, BackUp };
+
+// Generic folder picker (no DARKSOULS.exe validation) for the backup destination.
+static std::string browseFolder(HWND owner, const wchar_t* title) {
+    BROWSEINFOW bi = {0};
+    bi.hwndOwner = owner;
+    bi.lpszTitle = title;
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (!pidl) return "";
+    wchar_t path[MAX_PATH] = {0};
+    BOOL got = SHGetPathFromIDListW(pidl, path);
+    CoTaskMemFree(pidl);
+    return got ? narrow(path) : "";
+}
+
+// Warn and ask whether to back up first. Packed installs get packed/unpacked/both.
+static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, bool& outUnpacked) {
+    outPacked = outUnpacked = false;
+    TASKDIALOGCONFIG tc = {0};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = owner;
+    tc.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_USE_COMMAND_LINKS;
+    tc.pszWindowTitle = L"mctde Installer";
+    tc.pszMainIcon = TD_WARNING_ICON;
+    tc.pszMainInstruction = L"Back up before installing?";
+    tc.pszContent = packed
+        ? L"Installing will unpack and modify this copy of Dark Souls. Keep a vanilla backup first?"
+        : L"Installing will modify this copy of Dark Souls. Keep a vanilla backup of it first?";
+
+    TASKDIALOG_BUTTON btns[2] = {
+        {101, L"Back up, then install\nYou'll pick a folder to save the backup to"},
+        {102, L"Install without backing up"},
+    };
+    tc.pButtons = btns;
+    tc.cButtons = 2;
+    tc.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    tc.nDefaultButton = 101;
+
+    TASKDIALOG_BUTTON radios[3] = {
+        {201, L"Packed copy (the original archives)"},
+        {202, L"Unpacked copy (vanilla, ready for other mods)"},
+        {203, L"Both"},
+    };
+    if (packed) {
+        tc.pRadioButtons = radios;
+        tc.cRadioButtons = 3;
+        tc.nDefaultRadioButton = 201;
+    }
+
+    int pressed = 0, radio = 201;
+    if (FAILED(TaskDialogIndirect(&tc, &pressed, &radio, nullptr))) return BackupChoice::Cancel;
+    if (pressed == 102) return BackupChoice::NoBackup;
+    if (pressed != 101) return BackupChoice::Cancel;
+    if (packed) {
+        outPacked   = (radio == 201 || radio == 203);
+        outUnpacked = (radio == 202 || radio == 203);
+    } else {
+        outUnpacked = true;   // unpacked install -> back up the current copy
+    }
+    return BackupChoice::BackUp;
 }
 
 static void addInstall(const GameInstall& gi) {
@@ -361,8 +437,23 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 EnableWindow(g_btnInstall, SendMessageW(g_list, LB_GETCURSEL, 0, 0) != LB_ERR);
             return 0;
         case IDC_INSTALL:
-            if (g_done) launchAndExit();
-            else startInstall();
+            if (g_done) { launchAndExit(); return 0; }
+            {
+                int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
+                if (sel < 0 || sel >= (int)g_installs.size()) return 0;
+                bool doP = false, doU = false;
+                BackupChoice c = showBackupChoice(hWnd, g_installs[sel].state == GameState::Packed, doP, doU);
+                if (c == BackupChoice::Cancel) return 0;
+                g_doBackup = (c == BackupChoice::BackUp);
+                if (g_doBackup) {
+                    std::string dest = browseFolder(hWnd, L"Choose where to save the backup");
+                    if (dest.empty()) return 0;   // cancelled destination picker
+                    g_backupOpts.packed = doP;
+                    g_backupOpts.unpacked = doU;
+                    g_backupOpts.destRoot = dest;
+                }
+                startInstall();
+            }
             return 0;
         case IDC_BROWSE:
             if (!g_installing) {
@@ -399,6 +490,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
     g_inst = hInst;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_STANDARD_CLASSES};
+    InitCommonControlsEx(&icc);
 
     g_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     LOGFONTW lf = {0};

@@ -15,6 +15,19 @@ enum class InstallResult { Done, AlreadyDone, Failed };
 // (pct < 0 means indeterminate / spinner).
 using InstallProgress = std::function<void(const std::string& stage, int pct)>;
 
+// What kind of pre-mod backup(s) to make, and where.
+struct BackupOptions {
+    bool packed = false;     // keep a copy of the vanilla packed archives
+    bool unpacked = false;   // build a vanilla unpacked copy (ready for other mods)
+    std::string destRoot;    // parent folder the backup(s) are written under
+};
+
+// Make the requested vanilla backups before any modding. Writes
+// "<game> - vanilla (packed)/DATA" and/or "<game> - vanilla (unpacked)/DATA"
+// under destRoot. `message` gets a summary.
+bool runBackups(const std::string& dataDir, const BackupOptions& opts,
+                std::string& message, const InstallProgress& progress = {});
+
 // The whole player-facing flow on a DATA folder: unpack+patch if the game is
 // still packed, then download + install the mod, mctde-Link, and the launcher.
 // `namelistPath` points at dvdbnd_namelist.txt. Idempotent on the unpack step.

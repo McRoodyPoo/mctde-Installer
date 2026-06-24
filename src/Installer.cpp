@@ -99,6 +99,80 @@ static ProgressFn dlProgress(const InstallProgress& progress, const std::string&
     };
 }
 
+static void copyIfExists(const fs::path& src, const fs::path& dstDir) {
+    std::error_code ec;
+    if (fs::exists(src, ec))
+        fs::copy_file(src, dstDir / src.filename(), fs::copy_options::overwrite_existing, ec);
+}
+
+// Copy the vanilla essentials (exe + dvdbnd archives + the stock dlls) into dst.
+static void copyVanilla(const fs::path& data, const fs::path& dst) {
+    std::error_code ec;
+    fs::create_directories(dst, ec);
+    copyIfExists(data / "DARKSOULS.exe", dst);
+    for (int i = 0; i < 4; ++i) {
+        copyIfExists(data / ("dvdbnd" + std::to_string(i) + ".bhd5"), dst);
+        copyIfExists(data / ("dvdbnd" + std::to_string(i) + ".bdt"), dst);
+    }
+    for (const char* d : {"fmodex.dll", "fmod_event.dll", "steam_api.dll"})
+        copyIfExists(data / d, dst);
+}
+
+bool runBackups(const std::string& dataDir, const BackupOptions& opts,
+                std::string& message, const InstallProgress& progress) {
+    auto step = [&](const std::string& s) { if (progress) progress(s, -1); };
+    fs::path data(dataDir);
+    std::string gname = data.parent_path().filename().string();
+    if (gname.empty()) gname = "Dark Souls PTDE";
+    bool packedSrc = false;
+    for (int i = 0; i < 4; ++i)
+        if (fs::exists(data / ("dvdbnd" + std::to_string(i) + ".bdt"))) { packedSrc = true; break; }
+
+    try {
+        if (opts.packed) {
+            step("Backing up a packed copy...");
+            fs::path dst = fs::path(opts.destRoot) / (gname + " - vanilla (packed)") / "DATA";
+            if (packedSrc) {
+                copyVanilla(data, dst);
+            } else {  // already unpacked: copy the whole folder as-is
+                std::error_code ec;
+                fs::create_directories(dst, ec);
+                fs::copy(data, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            }
+        }
+        if (opts.unpacked) {
+            fs::path dst = fs::path(opts.destRoot) / (gname + " - vanilla (unpacked)") / "DATA";
+            if (packedSrc) {
+                step("Building a vanilla unpacked copy (this takes a minute)...");
+                copyVanilla(data, dst);                  // archives + exe into the backup
+                unpackAll(dst.string(), dst.string(), "");
+                std::string pm;
+                fs::path tmp = dst / "DARKSOULS.exe.tmp";
+                if (patchExe((dst / "DARKSOULS.exe").string(), tmp.string(), pm) == PatchResult::Patched) {
+                    std::error_code ec;
+                    fs::remove(dst / "DARKSOULS.exe", ec);
+                    fs::rename(tmp, dst / "DARKSOULS.exe", ec);
+                }
+                std::error_code ec;
+                for (int i = 0; i < 4; ++i) {
+                    fs::remove(dst / ("dvdbnd" + std::to_string(i) + ".bhd5"), ec);
+                    fs::remove(dst / ("dvdbnd" + std::to_string(i) + ".bdt"), ec);
+                }
+            } else {
+                step("Backing up the unpacked copy...");
+                std::error_code ec;
+                fs::create_directories(dst, ec);
+                fs::copy(data, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            }
+        }
+        message = "Backup complete.";
+        return true;
+    } catch (const std::exception& e) {
+        message = std::string("backup failed: ") + e.what();
+        return false;
+    }
+}
+
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
                           std::string& message, const InstallProgress& progress) {
     auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
