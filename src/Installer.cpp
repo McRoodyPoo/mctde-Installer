@@ -22,12 +22,26 @@ static const char* kLinkUrl =
 static const char* kLauncherUrl =
     "https://github.com/McRoodyPoo/mctde-Launcher/releases/latest/download/mctde_launcher.exe";
 
-// Snapshot the whole DATA folder to `dst` (a sibling backup folder). No-op if
-// `dst` already exists, so a good vanilla backup is never overwritten with a
-// modified copy. Returns false (and sets `message`) only on a real copy error.
+// Pick a backup folder name that doesn't collide with an existing one: returns
+// `base` if it's free, otherwise `base (2)`, `base (3)`, ... This way a backup a
+// previous run left behind is preserved instead of being skipped or overwritten
+// (overwriting into a populated/locked leftover folder is what used to stall the
+// install). The chosen folder is always fresh, so the copy starts from empty.
+static fs::path uniqueBackupPath(const fs::path& base) {
+    std::error_code ec;
+    if (!fs::exists(base, ec)) return base;
+    for (int n = 2; n < 1000; ++n) {
+        fs::path cand = base.parent_path() / (base.filename().string() + " (" + std::to_string(n) + ")");
+        if (!fs::exists(cand, ec)) return cand;
+    }
+    return base;   // pathological fallback (1000 existing backups); copy will report any error
+}
+
+// Snapshot the whole DATA folder to `dst` (a sibling backup folder). `dst` is
+// expected to be a fresh, non-existing path (see uniqueBackupPath). Returns false
+// (and sets `message`) only on a real copy error.
 static bool backupDataFolder(const fs::path& data, const fs::path& dst, std::string& message) {
     std::error_code ec;
-    if (fs::exists(dst, ec)) return true;   // keep the existing backup as-is
     fs::create_directories(dst, ec);
     fs::copy(data, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
     if (ec) {
@@ -134,8 +148,9 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         // 0a. Back up the still-packed copy (before unpacking), if requested.
         //     Only meaningful while the install is actually packed.
         if (packed && backupPacked) {
-            step("Backing up the packed copy...", -1);
-            if (!backupDataFolder(data, parent / "DATA-Backup-Packed", message))
+            fs::path dst = uniqueBackupPath(parent / "DATA-Backup-Packed");
+            step("Backing up the packed copy to " + dst.filename().string() + "...", -1);
+            if (!backupDataFolder(data, dst, message))
                 return InstallResult::Failed;
         }
 
@@ -151,8 +166,9 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
 
         // 1b. Back up the unpacked (still-vanilla) copy before the mod goes in.
         if (backupUnpacked) {
-            step("Backing up the unpacked copy...", -1);
-            if (!backupDataFolder(data, parent / "DATA-Backup-Unpacked", message))
+            fs::path dst = uniqueBackupPath(parent / "DATA-Backup-Unpacked");
+            step("Backing up the unpacked copy to " + dst.filename().string() + "...", -1);
+            if (!backupDataFolder(data, dst, message))
                 return InstallResult::Failed;
         }
 

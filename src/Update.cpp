@@ -14,7 +14,7 @@
 namespace mctde {
 
 // Bump this on every installer release, in lockstep with latest.txt.
-const char* const kInstallerVersion = "0.1.2";
+const char* const kInstallerVersion = "0.1.3";
 
 // Version comes from the central latest.txt (same manifest the in-game updater
 // reads). The installer exe itself is attached to each mctde-Installer release.
