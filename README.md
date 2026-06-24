@@ -1,18 +1,46 @@
 # mctde-Installer
 
-`mctde-Installer` is a native C++ unpacker and installer for the **mctde** Dark
-Souls: Prepare to Die Edition (PTDE) mod setup. It does in C++ what
+`mctde-Installer` is the one-step installer for the **mctde** Dark Souls: Prepare
+to Die Edition (PTDE) setup. You point it at a Dark Souls install and it turns a
+clean copy into a ready-to-play mctde install:
+
+1. unpacks the game's `dvdbnd` archives into loose, moddable files and patches
+   `DARKSOULS.exe` to load them,
+2. downloads and installs the main **mctde** mod, **mctde-Link**, and the **mctde
+   launcher**, and
+3. sets the game up to launch under the mod's Steam configuration.
+
+The unpack/patch core does in C++ what
 [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding)
-(UDSFM) does: it unpacks the game's `dvdbnd` archives into loose files and patches
-`DARKSOULS.exe` to load them, so the engine reads moddable loose files instead of
-the packed archives. Being native C++ lets it ship as a single tool inside the
-mctde toolchain.
+(UDSFM) does; the rest is the download-and-deploy flow that lays the whole mctde
+stack down for you.
 
-## What it does
+There's a small GUI for normal use — it scans for Dark Souls installs, you pick
+one and click **Install** — and a CLI that exposes the individual steps.
 
-`install` runs the whole flow in one shot — back up the originals, unpack, patch
-the exe, delete the archives — and is safe to re-run. Under the hood that's three
-steps:
+## What a full install does
+
+Run against a PTDE `DATA` folder (GUI, or `fullinstall` on the CLI), the
+installer:
+
+1. **Unpacks + patches the game** — only if it's still packed. `dvdbnd` archives
+   become loose files, `DARKSOULS.exe` is patched to read them, and the original
+   exe + archives are backed up to `mctde-backup/` first. (Details below.)
+2. **Downloads the mctde mod** from the project's Cloudflare R2 bucket and
+   extracts it over the game root, so its `DATA/` contents merge in.
+3. **Downloads mctde-Link** (the `d3d9.dll` proxy/overlay) from its latest GitHub
+   release and extracts it into `DATA/`.
+4. **Downloads the launcher** (`mctde_launcher.exe`) from its latest GitHub
+   release into `DATA/`.
+5. **Writes `steam_appid.txt`** (`480`, Spacewar) into `DATA/` so the game
+   launches under the mod's Steam setup.
+
+It's idempotent: the unpack/patch step backs originals up to `mctde-backup/` and
+drops a `.mctde-unpacked` sentinel, so re-running skips work that's already done.
+
+## Unpacking & patching (the core)
+
+The unpack/patch step is three coordinated operations:
 
 1. **Unpack** `dvdbnd0-3.bhd5` / `.bdt` into the 18 top-level game directories
    (`chr event facegen font map menu msg mtd obj other param paramdef parts remo
@@ -25,9 +53,6 @@ steps:
    that turns off the DCX-decompression path. The exe is checked by SHA-256 first,
    so only a known clean build is ever patched.
 3. **Delete the archives** so the engine falls back to the loose files.
-
-It's idempotent: originals are backed up to `mctde-backup/`, and a
-`.mctde-unpacked` sentinel makes re-runs no-ops.
 
 ## File formats (PTDE)
 
@@ -42,10 +67,13 @@ It's idempotent: originals are backed up to `mctde-backup/`, and a
 ## Layout
 
 ```
-src/            core decoders + install flow
+src/            core decoders + install flow + GUI
   BinaryReader.h  little-endian buffer reader
   Bhd5.{h,cpp}    BHD5 header parser
   Dcx.{h,cpp}     DCX detect + zlib inflate
+  Download.{h,cpp} WinHTTP downloader
+  Installer.cpp   unpack/patch + full download-and-deploy flow
+  Gui.cpp         installer window
 third_party/
   miniz.{c,h}     public-domain (Unlicense) zlib implementation
 data/           generated namelist(s)
@@ -60,14 +88,17 @@ cmake --build build --config Release
 
 ## Usage
 
+The GUI is the normal way in. The CLI exposes each step:
+
 ```
-mctde-installer install <DATA dir> [namelist]   full flow (backup, unpack, patch, cleanup)
-mctde-installer unpack  <DATA dir> <out> [nl]    just unpack dvdbnd + nested archives
-mctde-installer patchexe <inExe> <outExe>        just patch a clean DARKSOULS.exe
+mctde-installer fullinstall <DATA dir> [namelist]   full flow: unpack, patch, download + install the mod, Link, launcher
+mctde-installer install     <DATA dir> [namelist]   unpack + patch only (no downloads)
+mctde-installer unpack      <DATA dir> <out> [nl]    just unpack dvdbnd + nested archives
+mctde-installer patchexe    <inExe> <outExe>         just patch a clean DARKSOULS.exe
 ```
 
-Diagnostics: `bhd5`, `hashes`, `hashstr`, `cover`, `dcx`, `extract`, `nested`,
-`bnd3`, `diff`.
+Diagnostics: `bhd5`, `bnd3`, `dcx`, `extract`, `extractzip`, `nested`, `detect`,
+`detectall`, `download`, `gdrive`, `diff`.
 
 ## Status
 
