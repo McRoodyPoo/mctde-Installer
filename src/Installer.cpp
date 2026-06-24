@@ -15,7 +15,7 @@ namespace mctde {
 // Download endpoints. The mod payload is host-agnostic (one constant); Link and
 // launcher track the latest GitHub release.
 static const char* kModUrl =
-    "https://pub-a3408f748d5c4dc3958b7b72dd0f107b.r2.dev/mctde%200.88%20(STABLE).zip";
+    "https://pub-7f583dbe74f94799be8d82e955438332.r2.dev/0.88.zip";
 static const char* kLinkUrl =
     "https://github.com/McRoodyPoo/mctde-Link/releases/latest/download/mctde-Link.zip";
 static const char* kLauncherUrl =
@@ -151,6 +151,13 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
                          dlProgress(progress, "Downloading the launcher..."))) {
             message = "launcher download failed: " + err;
             return InstallResult::Failed;
+        }
+
+        // 5. steam_appid.txt (exactly "480", Spacewar) so the game launches under
+        //    the mod's Steam setup. Written last, into the DATA folder.
+        {
+            std::ofstream sa((data / "steam_appid.txt"), std::ios::binary | std::ios::trunc);
+            sa.write("480", 3);
         }
 
         step("Done!", 100);

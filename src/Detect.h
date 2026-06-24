@@ -3,6 +3,7 @@
 // Detect: locate the PTDE install via Steam, and classify a DATA folder as
 // packed (archives present) or unpacked (loose files).
 //
+#include <functional>
 #include <string>
 
 namespace mctde {
@@ -23,5 +24,16 @@ GameState detectGameState(const std::string& dataDir);
 // the installer's own folder, the user's Desktop/Documents/Downloads, and drive
 // roots. Returns the DATA dir (containing DARKSOULS.exe) or "".
 std::string findDataDir();
+
+struct GameInstall {
+    std::string dataDir;   // folder containing DARKSOULS.exe
+    bool steam;            // path lives under a Steam library
+    GameState state;       // packed / unpacked / unknown
+};
+
+// Find ALL PTDE installs, invoking `onFound` for each as it is discovered
+// (Steam libraries first, then the bounded scan). Deduplicates by path, so the
+// callback fires once per install. Designed to drive a live-updating UI list.
+void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound);
 
 } // namespace mctde

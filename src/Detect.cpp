@@ -9,8 +9,11 @@
 #pragma comment(lib, "ole32.lib")
 #include <utility>
 
+#include <cctype>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -88,6 +91,17 @@ static std::string knownFolder(REFKNOWNFOLDERID id) {
     return out;
 }
 
+// Directories that never hold the game and only waste the scan budget (or
+// surface deleted copies). Compared case-insensitively on the folder name.
+static bool isJunkDir(const std::wstring& nameRaw) {
+    std::wstring n = nameRaw;
+    for (wchar_t& c : n) c = towlower(c);
+    return n == L"$recycle.bin" || n == L"system volume information" ||
+           n == L"windows" || n == L"$windows.~ws" || n == L"$winreagent" ||
+           n == L"$sysreset" || n == L"msocache" || n == L"windows.old" ||
+           n == L"unpackds-backup" || n == L"mctde-backup";  // archive backups, not installs
+}
+
 // Depth- and time-bounded recursive search for DARKSOULS.exe under root.
 static std::string searchRoot(const fs::path& root, int maxDepth, ULONGLONG deadline) {
     std::error_code ec;
@@ -97,11 +111,16 @@ static std::string searchRoot(const fs::path& root, int maxDepth, ULONGLONG dead
     for (; it != end; it.increment(ec)) {
         if (ec) { ec.clear(); continue; }
         if (GetTickCount64() > deadline) break;
-        if (it.depth() >= maxDepth) it.disable_recursion_pending();
-        std::error_code ec2;
-        if (it->is_regular_file(ec2) &&
-            _stricmp(it->path().filename().string().c_str(), "DARKSOULS.exe") == 0)
-            return it->path().parent_path().string();
+        try {
+            if (it.depth() >= maxDepth) it.disable_recursion_pending();
+            std::error_code ec2;
+            if (it->is_directory(ec2)) {
+                if (isJunkDir(it->path().filename().wstring())) it.disable_recursion_pending();
+            } else if (it->is_regular_file(ec2) &&
+                       _wcsicmp(it->path().filename().c_str(), L"DARKSOULS.exe") == 0) {
+                return it->path().parent_path().string();
+            }
+        } catch (const std::exception&) { /* skip un-representable entry */ }
     }
     return "";
 }
@@ -149,6 +168,83 @@ std::string findDataDir() {
         if (!hit.empty()) return hit;
     }
     return "";
+}
+
+// Like searchRoot, but reports every DARKSOULS.exe folder it finds (not just
+// the first) via onHit.
+static void searchRootAll(const fs::path& root, int maxDepth, ULONGLONG deadline,
+                          const std::function<void(const std::string&)>& onHit) {
+    std::error_code ec;
+    if (root.empty() || !fs::exists(root, ec)) return;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+    if (ec) return;
+    for (; it != end; it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (GetTickCount64() > deadline) break;
+        try {
+            if (it.depth() >= maxDepth) it.disable_recursion_pending();
+            std::error_code ec2;
+            if (it->is_directory(ec2)) {
+                if (isJunkDir(it->path().filename().wstring())) it.disable_recursion_pending();
+            } else if (it->is_regular_file(ec2) &&
+                       _wcsicmp(it->path().filename().c_str(), L"DARKSOULS.exe") == 0) {
+                onHit(it->path().parent_path().string());
+            }
+        } catch (const std::exception&) { /* skip un-representable entry */ }
+    }
+}
+
+void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
+    std::set<std::string> seen;
+    auto report = [&](const std::string& dir) {
+        std::string key = dir;
+        for (char& c : key) c = char(std::tolower((unsigned char)c));
+        if (!seen.insert(key).second) return;  // already reported
+        bool steam = key.find("steamapps") != std::string::npos;
+        onFound(GameInstall{dir, steam, detectGameState(dir)});
+    };
+
+    const std::string sub = "\\steamapps\\common\\Dark Souls Prepare to Die Edition\\DATA";
+
+    // 1. Steam libraries (registry + libraryfolders.vdf) — fast, most likely.
+    for (const std::string& lib : libraryPaths(steamRoot())) {
+        std::error_code ec;
+        std::string data = lib + sub;
+        if (fs::exists(fs::path(data) / "DARKSOULS.exe", ec)) report(data);
+    }
+
+    // 2. Fixed Steam-library spots on every drive.
+    DWORD drives = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(drives & (1u << i))) continue;
+        std::string r(1, char('A' + i));
+        r += ":";
+        for (const char* p : {"\\Steam", "\\SteamLibrary", "\\Games\\Steam",
+                              "\\Program Files (x86)\\Steam", "\\Program Files\\Steam",
+                              "\\SteamLibrary\\steamapps\\common"}) {
+            std::error_code ec;
+            std::string cand = r + p + sub;
+            if (fs::exists(fs::path(cand) / "DARKSOULS.exe", ec)) report(cand);
+        }
+    }
+
+    // 3. Bounded recursive scan (installer folder, user folders, drive roots).
+    ULONGLONG deadline = GetTickCount64() + 20000;
+    wchar_t self[MAX_PATH] = {0};
+    GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::vector<std::pair<fs::path, int>> roots;
+    roots.push_back({fs::path(self).parent_path(), 6});
+    roots.push_back({knownFolder(FOLDERID_Desktop), 4});
+    roots.push_back({knownFolder(FOLDERID_Downloads), 4});
+    roots.push_back({knownFolder(FOLDERID_Documents), 4});
+    for (int i = 0; i < 26; ++i) {
+        if (!(drives & (1u << i))) continue;
+        roots.push_back({std::string(1, char('A' + i)) + ":\\", 4});
+    }
+    for (const auto& r : roots) {
+        if (GetTickCount64() > deadline) break;
+        searchRootAll(r.first, r.second, deadline, report);
+    }
 }
 
 GameState detectGameState(const std::string& dataDir) {

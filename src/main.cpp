@@ -113,6 +113,19 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (cmd == "detectall") {
+            int n = 0;
+            findAllDataDirs([&](const GameInstall& gi) {
+                const char* st = gi.state == GameState::Packed ? "packed"
+                               : gi.state == GameState::Unpacked ? "unpacked" : "unknown";
+                std::printf("  [%-9s] %-9s %s\n", gi.steam ? "Steam" : "non-Steam", st,
+                            gi.dataDir.c_str());
+                ++n;
+            });
+            std::printf("found %d install(s)\n", n);
+            return 0;
+        }
+
         if (cmd == "detect") {
             std::string data = detectSteamDataDir();
             if (data.empty()) { std::printf("no PTDE install found via Steam\n"); return 0; }

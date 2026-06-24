@@ -1,15 +1,18 @@
 // Gui.cpp — native Win32 front-end for the mctde installer.
 //
-// Dark window with the Artorias banner, an Install/Cancel pair, and a progress
-// bar driven by fullInstall() on a worker thread. Matches the mctde-Launcher
-// look (same banner.bmp), no .NET/runtime.
+// Dark window with the Artorias banner. On launch it scans for every Dark Souls
+// PTDE install (Steam libraries first, then a bounded drive scan) and lists them
+// live as they're found, tagging Steam copies. The user picks one; Install runs
+// the full flow on that copy via fullInstall() on a worker thread.
 //
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include <cctype>
 #include <string>
+#include <vector>
 
 #include "gui_resource.h"
 #include "Detect.h"
@@ -23,36 +26,45 @@ using namespace mctde;
 #pragma comment(lib, "ole32.lib")
 
 // ---- control / message ids ----
+#define IDC_LIST      1000
 #define IDC_INSTALL   1001
 #define IDC_CANCEL    1002
-#define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 = indeterminate), lParam = new wchar_t[] status
+#define IDC_BROWSE    1003
+#define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 indeterminate), lParam = new wchar_t[] status
 #define WM_DONE       (WM_APP + 2)   // wParam = success?1:0, lParam = new wchar_t[] message
-#define WM_NEEDFOLDER (WM_APP + 3)
+#define WM_FOUND      (WM_APP + 3)   // lParam = new GameInstall*
+#define WM_SCANDONE   (WM_APP + 4)
 
 // ---- palette ----
-static const COLORREF CLR_BG    = RGB(24, 24, 28);
-static const COLORREF CLR_TEXT  = RGB(228, 228, 230);
-static const COLORREF CLR_BTN   = RGB(56, 56, 64);
-static const COLORREF CLR_BTNHI = RGB(82, 82, 94);
-static const COLORREF CLR_BTNDIS= RGB(40, 40, 46);
-static const COLORREF CLR_BAR   = RGB(150, 42, 42);
-static const COLORREF CLR_BARBG = RGB(46, 46, 54);
-static const COLORREF CLR_FRAME = RGB(92, 92, 104);
+static const COLORREF CLR_BG     = RGB(24, 24, 28);
+static const COLORREF CLR_TEXT   = RGB(228, 228, 230);
+static const COLORREF CLR_DIM    = RGB(150, 150, 156);
+static const COLORREF CLR_BTN    = RGB(56, 56, 64);
+static const COLORREF CLR_BTNHI  = RGB(82, 82, 94);
+static const COLORREF CLR_BTNDIS = RGB(40, 40, 46);
+static const COLORREF CLR_BAR    = RGB(150, 42, 42);
+static const COLORREF CLR_BARBG  = RGB(46, 46, 54);
+static const COLORREF CLR_FRAME  = RGB(92, 92, 104);
+static const COLORREF CLR_LIST   = RGB(34, 34, 40);
+static const COLORREF CLR_LISTSEL= RGB(62, 62, 78);
+static const COLORREF CLR_STEAM  = RGB(120, 200, 120);   // green-ish "Steam" tag
 
-static const int WIN_W = 524, WIN_H = 300, BANNER_H = 115;
+static const int WIN_W = 560, WIN_H = 490, BANNER_H = 115;
 
 // ---- state ----
 static HINSTANCE g_inst = nullptr;
 static HBITMAP   g_banner = nullptr;
 static HFONT     g_font = nullptr, g_fontStatus = nullptr;
-static HWND      g_hwnd = nullptr, g_btnInstall = nullptr, g_btnCancel = nullptr;
-static int       g_pct = 0;
-static std::wstring g_status = L"Ready to install. Click Install to begin.";
+static HWND      g_hwnd = nullptr, g_list = nullptr;
+static HWND      g_btnInstall = nullptr, g_btnCancel = nullptr, g_btnBrowse = nullptr;
+static HBRUSH    g_listBrush = nullptr;   // dark fill for the listbox's empty area
+static int       g_pct = -1;
+static std::wstring g_status = L"Scanning for Dark Souls installs...";
 static volatile bool g_installing = false;
-static bool      g_done = false;       // finished successfully
-static std::string g_dataDir;          // resolved by the worker
-static HANDLE    g_folderEvent = nullptr;
-static std::string g_browseResult;
+static volatile bool g_scanning = false;
+static bool      g_done = false;
+static std::vector<GameInstall> g_installs;
+static std::string g_selDir;   // the install the worker is operating on
 
 static std::wstring widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -68,45 +80,28 @@ static std::string narrow(const std::wstring& w) {
     WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
     return s;
 }
-static std::wstring moduleDir() {
-    wchar_t buf[MAX_PATH] = {0};
-    GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    std::wstring p = buf;
-    size_t slash = p.find_last_of(L"\\/");
-    return slash == std::wstring::npos ? L"" : p.substr(0, slash + 1);
-}
 static wchar_t* dupw(const std::wstring& s) {
     wchar_t* p = new wchar_t[s.size() + 1];
     wmemcpy(p, s.c_str(), s.size() + 1);
     return p;
 }
-
 static void postStatus(int pct, const std::wstring& s) {
     if (g_hwnd) PostMessageW(g_hwnd, WM_PROGRESS, (WPARAM)pct, (LPARAM)dupw(s));
 }
 
-// ---- worker ----
+// ---- worker threads ----
+static DWORD WINAPI ScanThread(LPVOID) {
+    findAllDataDirs([](const GameInstall& gi) {
+        if (g_hwnd) PostMessageW(g_hwnd, WM_FOUND, 0, (LPARAM)new GameInstall(gi));
+    });
+    if (g_hwnd) PostMessageW(g_hwnd, WM_SCANDONE, 0, 0);
+    return 0;
+}
+
 static DWORD WINAPI InstallThread(LPVOID) {
-    postStatus(-1, L"Looking for your Dark Souls install...");
-    std::string data = findDataDir();
-    if (data.empty()) {
-        g_browseResult.clear();
-        ResetEvent(g_folderEvent);
-        PostMessageW(g_hwnd, WM_NEEDFOLDER, 0, 0);
-        WaitForSingleObject(g_folderEvent, INFINITE);
-        data = g_browseResult;
-        if (data.empty()) {
-            PostMessageW(g_hwnd, WM_DONE, 0, (LPARAM)dupw(L"Couldn't find DARKSOULS.exe. Put the installer in your game folder and retry."));
-            g_installing = false;
-            return 0;
-        }
-    }
-    g_dataDir = data;
-
     std::string msg;
-    InstallResult r = fullInstall(data, "", msg,   // "" -> use the embedded namelist
+    InstallResult r = fullInstall(g_selDir, "", msg,   // "" -> embedded namelist
         [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); });
-
     PostMessageW(g_hwnd, WM_DONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
     g_installing = false;
     return 0;
@@ -115,7 +110,7 @@ static DWORD WINAPI InstallThread(LPVOID) {
 static std::string browseForData(HWND owner) {
     BROWSEINFOW bi = {0};
     bi.hwndOwner = owner;
-    bi.lpszTitle = L"Select your Dark Souls DATA folder (the one with DARKSOULS.exe)";
+    bi.lpszTitle = L"Select a Dark Souls DATA folder (the one with DARKSOULS.exe)";
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
     if (!pidl) return "";
@@ -126,28 +121,45 @@ static std::string browseForData(HWND owner) {
     std::string s = narrow(path);
     if (!s.empty() && GetFileAttributesA((s + "\\DARKSOULS.exe").c_str()) != INVALID_FILE_ATTRIBUTES)
         return s;
+    MessageBoxW(owner, L"That folder doesn't contain DARKSOULS.exe.", L"mctde Installer",
+                MB_OK | MB_ICONWARNING);
     return "";
 }
 
+static void addInstall(const GameInstall& gi) {
+    for (const auto& e : g_installs) if (e.dataDir == gi.dataDir) return;  // dedup
+    g_installs.push_back(gi);
+    SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)widen(gi.dataDir).c_str());
+    if (g_installs.size() == 1) {            // auto-select the first
+        SendMessageW(g_list, LB_SETCURSEL, 0, 0);
+        EnableWindow(g_btnInstall, TRUE);
+    }
+}
+
 static void startInstall() {
-    if (g_installing) return;
+    int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel >= (int)g_installs.size()) return;
+    g_selDir = g_installs[sel].dataDir;
     g_installing = true;
     g_done = false;
     g_pct = -1;
     EnableWindow(g_btnInstall, FALSE);
     EnableWindow(g_btnCancel, FALSE);
+    EnableWindow(g_btnBrowse, FALSE);
+    EnableWindow(g_list, FALSE);
     SetWindowTextW(g_btnInstall, L"Installing...");
     if (HANDLE t = CreateThread(nullptr, 0, InstallThread, nullptr, 0, nullptr)) CloseHandle(t);
 }
 
 static void launchAndExit() {
-    std::wstring exe = widen(g_dataDir) + L"\\mctde_launcher.exe";
+    std::wstring exe = widen(g_selDir) + L"\\mctde_launcher.exe";
     if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
-        exe = widen(g_dataDir) + L"\\DARKSOULS.exe";
-    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, widen(g_dataDir).c_str(), SW_SHOWNORMAL);
+        exe = widen(g_selDir) + L"\\DARKSOULS.exe";
+    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, widen(g_selDir).c_str(), SW_SHOWNORMAL);
     DestroyWindow(g_hwnd);
 }
 
+// ---- drawing ----
 static void paintButton(DRAWITEMSTRUCT* di) {
     bool pressed = (di->itemState & ODS_SELECTED) != 0;
     bool disabled = (di->itemState & ODS_DISABLED) != 0;
@@ -164,6 +176,48 @@ static void paintButton(DRAWITEMSTRUCT* di) {
     SetTextColor(di->hDC, disabled ? RGB(120, 120, 124) : CLR_TEXT);
     SelectObject(di->hDC, g_font);
     DrawTextW(di->hDC, txt, -1, &di->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintListItem(DRAWITEMSTRUCT* di) {
+    if (di->itemID == (UINT)-1) return;
+    const GameInstall& gi = g_installs[di->itemID];
+    bool sel = (di->itemState & ODS_SELECTED) != 0;
+    HBRUSH bg = CreateSolidBrush(sel ? CLR_LISTSEL : CLR_LIST);
+    FillRect(di->hDC, &di->rcItem, bg);
+    DeleteObject(bg);
+
+    SetBkMode(di->hDC, TRANSPARENT);
+    SelectObject(di->hDC, g_font);
+
+    // Right-side tags: "Steam" (if so) and the packed/unpacked state.
+    const wchar_t* stateText = gi.state == GameState::Packed ? L"packed"
+                             : gi.state == GameState::Unpacked ? L"unpacked" : L"";
+    SIZE sz{0, 0};
+    GetTextExtentPoint32W(di->hDC, stateText, (int)wcslen(stateText), &sz);
+    int right = di->rcItem.right - 10;
+    RECT tr = di->rcItem;
+    if (stateText[0]) {
+        tr.left = right - sz.cx; tr.right = right;
+        SetTextColor(di->hDC, CLR_DIM);
+        DrawTextW(di->hDC, stateText, -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        right -= sz.cx + 12;
+    }
+    if (gi.steam) {
+        const wchar_t* tag = L"Steam";
+        SIZE s2{0, 0};
+        GetTextExtentPoint32W(di->hDC, tag, 5, &s2);
+        tr = di->rcItem; tr.left = right - s2.cx; tr.right = right;
+        SetTextColor(di->hDC, CLR_STEAM);
+        DrawTextW(di->hDC, tag, -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        right -= s2.cx + 12;
+    }
+
+    // Path on the left, ellipsized to fit the remaining width.
+    RECT pr = di->rcItem;
+    pr.left += 10; pr.right = right - 6;
+    SetTextColor(di->hDC, CLR_TEXT);
+    std::wstring path = widen(gi.dataDir);
+    DrawTextW(di->hDC, path.c_str(), -1, &pr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
 }
 
 static void paintWindow(HWND hWnd, HDC dc) {
@@ -187,12 +241,17 @@ static void paintWindow(HWND hWnd, HDC dc) {
     }
 
     SetBkMode(mem, TRANSPARENT);
-    SetTextColor(mem, CLR_TEXT);
-    SelectObject(mem, g_fontStatus);
-    RECT tr = {24, BANNER_H + 20, WIN_W - 24, BANNER_H + 52};
-    DrawTextW(mem, g_status.c_str(), -1, &tr, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+    SelectObject(mem, g_font);
+    SetTextColor(mem, CLR_DIM);
+    RECT lr = {24, BANNER_H + 8, WIN_W - 24, BANNER_H + 26};
+    DrawTextW(mem, L"Select the install to patch:", -1, &lr, DT_LEFT | DT_SINGLELINE);
 
-    RECT br = {24, BANNER_H + 60, WIN_W - 24, BANNER_H + 82};
+    SelectObject(mem, g_fontStatus);
+    SetTextColor(mem, CLR_TEXT);
+    RECT tr = {24, BANNER_H + 188, WIN_W - 24, WIN_H - 80};   // ~6 lines for long errors
+    DrawTextW(mem, g_status.c_str(), -1, &tr, DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+
+    RECT br = {24, WIN_H - 72, WIN_W - 24, WIN_H - 56};
     HBRUSH barbg = CreateSolidBrush(CLR_BARBG);
     FillRect(mem, &br, barbg);
     DeleteObject(barbg);
@@ -220,10 +279,20 @@ static void paintWindow(HWND hWnd, HDC dc) {
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
+        g_list = CreateWindowW(L"LISTBOX", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_BORDER |
+            LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+            24, BANNER_H + 28, WIN_W - 48, 150, hWnd, (HMENU)IDC_LIST, g_inst, nullptr);
+        g_btnBrowse = CreateWindowW(L"BUTTON", L"Browse...", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            24, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_BROWSE, g_inst, nullptr);
         g_btnCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            WIN_W - 224, BANNER_H + 96, 90, 34, hWnd, (HMENU)IDC_CANCEL, g_inst, nullptr);
+            WIN_W - 224, WIN_H - 50, 90, 34, hWnd, (HMENU)IDC_CANCEL, g_inst, nullptr);
         g_btnInstall = CreateWindowW(L"BUTTON", L"Install", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            WIN_W - 124, BANNER_H + 96, 100, 34, hWnd, (HMENU)IDC_INSTALL, g_inst, nullptr);
+            WIN_W - 124, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_INSTALL, g_inst, nullptr);
+        EnableWindow(g_btnInstall, FALSE);   // until something is selected
+        g_listBrush = CreateSolidBrush(CLR_LIST);
+        g_scanning = true;
+        if (HANDLE t = CreateThread(nullptr, 0, ScanThread, nullptr, 0, nullptr)) CloseHandle(t);
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -232,24 +301,44 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         EndPaint(hWnd, &ps);
         return 0;
     }
-    case WM_DRAWITEM:
-        if (wParam == IDC_INSTALL || wParam == IDC_CANCEL) {
-            paintButton((DRAWITEMSTRUCT*)lParam);
-            return TRUE;
-        }
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT* mi = (MEASUREITEMSTRUCT*)lParam;
+        if (mi->CtlID == IDC_LIST) mi->itemHeight = 24;
+        return TRUE;
+    }
+    case WM_CTLCOLORLISTBOX: {
+        HDC dc = (HDC)wParam;
+        SetBkColor(dc, CLR_LIST);
+        SetTextColor(dc, CLR_TEXT);
+        return (LRESULT)g_listBrush;
+    }
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* di = (DRAWITEMSTRUCT*)lParam;
+        if (di->CtlType == ODT_LISTBOX) { paintListItem(di); return TRUE; }
+        if (di->CtlType == ODT_BUTTON) { paintButton(di); return TRUE; }
         break;
+    }
+    case WM_FOUND: {
+        GameInstall* gi = (GameInstall*)lParam;
+        if (gi) { addInstall(*gi); delete gi; InvalidateRect(hWnd, nullptr, FALSE); }
+        return 0;
+    }
+    case WM_SCANDONE:
+        g_scanning = false;
+        g_status = g_installs.empty()
+            ? L"No Dark Souls install found. Click Browse to locate DARKSOULS.exe."
+            : L"Found " + std::to_wstring(g_installs.size()) +
+              L" install(s). Pick one and click Install.";
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return 0;
     case WM_PROGRESS: {
-        g_pct = (int)(int)wParam;
+        g_pct = (int)wParam;
         wchar_t* p = (wchar_t*)lParam;
         if (p) { g_status = p; delete[] p; }
-        RECT below = {0, BANNER_H, WIN_W, WIN_H};
+        RECT below = {0, BANNER_H + 180, WIN_W, WIN_H};
         InvalidateRect(hWnd, &below, FALSE);
         return 0;
     }
-    case WM_NEEDFOLDER:
-        g_browseResult = browseForData(hWnd);
-        SetEvent(g_folderEvent);
-        return 0;
     case WM_DONE: {
         g_installing = false;
         wchar_t* m = (wchar_t*)lParam;
@@ -259,6 +348,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_done = ok;
         EnableWindow(g_btnInstall, TRUE);
         EnableWindow(g_btnCancel, TRUE);
+        if (!ok) { EnableWindow(g_btnBrowse, TRUE); EnableWindow(g_list, TRUE); }
         SetWindowTextW(g_btnInstall, ok ? L"Play" : L"Install");
         SetWindowTextW(g_btnCancel, ok ? L"Close" : L"Cancel");
         InvalidateRect(hWnd, nullptr, FALSE);
@@ -266,9 +356,28 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case IDC_LIST:
+            if (HIWORD(wParam) == LBN_SELCHANGE && !g_installing && !g_done)
+                EnableWindow(g_btnInstall, SendMessageW(g_list, LB_GETCURSEL, 0, 0) != LB_ERR);
+            return 0;
         case IDC_INSTALL:
             if (g_done) launchAndExit();
             else startInstall();
+            return 0;
+        case IDC_BROWSE:
+            if (!g_installing) {
+                std::string d = browseForData(hWnd);
+                if (!d.empty()) {
+                    std::string low = d;
+                    for (char& c : low) c = (char)tolower((unsigned char)c);
+                    addInstall(GameInstall{d, low.find("steamapps") != std::string::npos,
+                                           detectGameState(d)});
+                    for (size_t i = 0; i < g_installs.size(); ++i)   // select the browsed one
+                        if (g_installs[i].dataDir == d) SendMessageW(g_list, LB_SETCURSEL, i, 0);
+                    EnableWindow(g_btnInstall, TRUE);
+                    InvalidateRect(hWnd, nullptr, FALSE);
+                }
+            }
             return 0;
         case IDC_CANCEL:
             if (!g_installing) DestroyWindow(hWnd);
@@ -276,10 +385,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         return 0;
     case WM_CLOSE:
-        if (g_installing) return 0;   // don't close mid-install
+        if (g_installing) return 0;
         DestroyWindow(hWnd);
         return 0;
     case WM_DESTROY:
+        if (g_listBrush) DeleteObject(g_listBrush);
         PostQuitMessage(0);
         return 0;
     }
@@ -289,12 +399,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
     g_inst = hInst;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    g_folderEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
     g_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     LOGFONTW lf = {0};
     GetObjectW(g_font, sizeof(lf), &lf);
-    lf.lfHeight = -16;
+    lf.lfHeight = -15;
     g_fontStatus = CreateFontIndirectW(&lf);
     g_banner = (HBITMAP)LoadImageW(hInst, MAKEINTRESOURCEW(IDB_BANNER), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
 
