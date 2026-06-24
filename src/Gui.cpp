@@ -67,8 +67,8 @@ static volatile bool g_scanning = false;
 static bool      g_done = false;
 static std::vector<GameInstall> g_installs;
 static std::string g_selDir;   // the install the worker is operating on
-static bool g_doBackup = false;
-static BackupOptions g_backupOpts;
+static bool g_backupPacked = false;
+static bool g_backupUnpacked = false;
 
 static std::wstring widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -104,17 +104,11 @@ static DWORD WINAPI ScanThread(LPVOID) {
 
 static DWORD WINAPI InstallThread(LPVOID) {
     std::string msg;
-    if (g_doBackup) {
-        if (!runBackups(g_selDir, g_backupOpts, msg,
-                        [](const std::string& s, int p) { postStatus(p, widen(s)); })) {
-            PostMessageW(g_hwnd, WM_DONE, 0,
-                         (LPARAM)dupw(widen("Backup failed: " + msg + "  (install aborted)")));
-            g_installing = false;
-            return 0;
-        }
-    }
+    // Backups (DATA-Backup-Packed before unpack, DATA-Backup-Unpacked after) are
+    // handled inside fullInstall at the right moments; a backup failure aborts.
     InstallResult r = fullInstall(g_selDir, "", msg,   // "" -> embedded namelist
-        [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); });
+        [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); },
+        g_backupPacked, g_backupUnpacked);
     PostMessageW(g_hwnd, WM_DONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
     g_installing = false;
     return 0;
@@ -141,20 +135,6 @@ static std::string browseForData(HWND owner) {
 
 enum class BackupChoice { Cancel, NoBackup, BackUp };
 
-// Generic folder picker (no DARKSOULS.exe validation) for the backup destination.
-static std::string browseFolder(HWND owner, const wchar_t* title) {
-    BROWSEINFOW bi = {0};
-    bi.hwndOwner = owner;
-    bi.lpszTitle = title;
-    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-    if (!pidl) return "";
-    wchar_t path[MAX_PATH] = {0};
-    BOOL got = SHGetPathFromIDListW(pidl, path);
-    CoTaskMemFree(pidl);
-    return got ? narrow(path) : "";
-}
-
 // Warn and ask whether to back up first. Packed installs get packed/unpacked/both.
 static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, bool& outUnpacked) {
     outPacked = outUnpacked = false;
@@ -166,11 +146,13 @@ static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, b
     tc.pszMainIcon = TD_WARNING_ICON;
     tc.pszMainInstruction = L"Back up before installing?";
     tc.pszContent = packed
-        ? L"Installing will unpack and modify this copy of Dark Souls. Keep a vanilla backup first?"
-        : L"Installing will modify this copy of Dark Souls. Keep a vanilla backup of it first?";
+        ? L"Installing will unpack and modify this copy of Dark Souls. Keep a vanilla "
+          L"backup first? It's saved right next to the DATA folder."
+        : L"Installing will modify this copy of Dark Souls. Keep a vanilla backup of "
+          L"it first? It's saved as DATA-Backup-Unpacked next to the DATA folder.";
 
     TASKDIALOG_BUTTON btns[2] = {
-        {101, L"Back up, then install\nYou'll pick a folder to save the backup to"},
+        {101, L"Back up, then install\nThe backup is saved next to your DATA folder"},
         {102, L"Install without backing up"},
     };
     tc.pButtons = btns;
@@ -179,8 +161,8 @@ static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, b
     tc.nDefaultButton = 101;
 
     TASKDIALOG_BUTTON radios[3] = {
-        {201, L"Packed copy (the original archives)"},
-        {202, L"Unpacked copy (vanilla, ready for other mods)"},
+        {201, L"Packed copy  (DATA-Backup-Packed — the original archives)"},
+        {202, L"Unpacked copy  (DATA-Backup-Unpacked — vanilla, ready for other mods)"},
         {203, L"Both"},
     };
     if (packed) {
@@ -444,14 +426,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 bool doP = false, doU = false;
                 BackupChoice c = showBackupChoice(hWnd, g_installs[sel].state == GameState::Packed, doP, doU);
                 if (c == BackupChoice::Cancel) return 0;
-                g_doBackup = (c == BackupChoice::BackUp);
-                if (g_doBackup) {
-                    std::string dest = browseFolder(hWnd, L"Choose where to save the backup");
-                    if (dest.empty()) return 0;   // cancelled destination picker
-                    g_backupOpts.packed = doP;
-                    g_backupOpts.unpacked = doU;
-                    g_backupOpts.destRoot = dest;
-                }
+                g_backupPacked   = (c == BackupChoice::BackUp) && doP;
+                g_backupUnpacked = (c == BackupChoice::BackUp) && doU;
                 startInstall();
             }
             return 0;

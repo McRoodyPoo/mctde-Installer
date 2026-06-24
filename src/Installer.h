@@ -15,32 +15,29 @@ enum class InstallResult { Done, AlreadyDone, Failed };
 // (pct < 0 means indeterminate / spinner).
 using InstallProgress = std::function<void(const std::string& stage, int pct)>;
 
-// What kind of pre-mod backup(s) to make, and where.
-struct BackupOptions {
-    bool packed = false;     // keep a copy of the vanilla packed archives
-    bool unpacked = false;   // build a vanilla unpacked copy (ready for other mods)
-    std::string destRoot;    // parent folder the backup(s) are written under
-};
-
-// Make the requested vanilla backups before any modding. Writes
-// "<game> - vanilla (packed)/DATA" and/or "<game> - vanilla (unpacked)/DATA"
-// under destRoot. `message` gets a summary.
-bool runBackups(const std::string& dataDir, const BackupOptions& opts,
-                std::string& message, const InstallProgress& progress = {});
-
 // The whole player-facing flow on a DATA folder: unpack+patch if the game is
 // still packed, then download + install the mod, mctde-Link, and the launcher.
 // `namelistPath` points at dvdbnd_namelist.txt. Idempotent on the unpack step.
+//
+// Optional backups are written as siblings of the DATA folder, and are only
+// made if the corresponding flag is set:
+//   backupPacked   -> "DATA-Backup-Packed"   (a copy of the still-packed DATA,
+//                      taken before unpacking; only if the install is packed)
+//   backupUnpacked -> "DATA-Backup-Unpacked" (a copy of the unpacked DATA,
+//                      taken after unpacking and before the mod is applied)
+// An existing backup folder is left untouched (never overwritten with a
+// modified copy).
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
-                          std::string& message, const InstallProgress& progress = {});
+                          std::string& message, const InstallProgress& progress = {},
+                          bool backupPacked = false, bool backupUnpacked = false);
 
-// Run the full flow on `dataDir` (the game's DATA folder):
-//   1. back up DARKSOULS.exe + dvdbnd0-3 to mctde-backup/
-//   2. unpack dvdbnd -> loose files (+ nested tpf/hkx/chr textures)
-//   3. patch DARKSOULS.exe to load loose files
-//   4. delete the dvdbnd archives
-//   5. drop a sentinel so re-runs are no-ops
-// `namelistPath` points at dvdbnd_namelist.txt. `message` gets a summary.
+// Unpack-and-patch a DATA folder in place (no backups, no downloads):
+//   1. unpack dvdbnd -> loose files (+ nested tpf/hkx/chr textures)
+//   2. patch DARKSOULS.exe to load loose files
+//   3. delete the dvdbnd archives
+//   4. drop a sentinel so re-runs are no-ops
+// Backups are the caller's responsibility (see fullInstall). `namelistPath`
+// points at dvdbnd_namelist.txt. `message` gets a summary.
 InstallResult installFlow(const std::string& dataDir,
                           const std::string& namelistPath,
                           std::string& message);

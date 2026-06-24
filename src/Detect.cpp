@@ -96,6 +96,9 @@ static std::string knownFolder(REFKNOWNFOLDERID id) {
 static bool isJunkDir(const std::wstring& nameRaw) {
     std::wstring n = nameRaw;
     for (wchar_t& c : n) c = towlower(c);
+    // DATA-Backup-Packed / DATA-Backup-Unpacked are our own backups: they hold a
+    // copy of DARKSOULS.exe, so they must not be picked up as separate installs.
+    if (n.rfind(L"data-backup", 0) == 0) return true;
     return n == L"$recycle.bin" || n == L"system volume information" ||
            n == L"windows" || n == L"$windows.~ws" || n == L"$winreagent" ||
            n == L"$sysreset" || n == L"msocache" || n == L"windows.old" ||
