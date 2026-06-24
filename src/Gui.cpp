@@ -161,8 +161,8 @@ static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, b
     tc.nDefaultButton = 101;
 
     TASKDIALOG_BUTTON radios[3] = {
-        {201, L"Packed copy  (DATA-Backup-Packed — the original archives)"},
-        {202, L"Unpacked copy  (DATA-Backup-Unpacked — vanilla, ready for other mods)"},
+        {201, L"Packed copy  (DATA-Backup-Packed - the original archives)"},
+        {202, L"Unpacked copy  (DATA-Backup-Unpacked - vanilla, ready for other mods)"},
         {203, L"Both"},
     };
     if (packed) {
