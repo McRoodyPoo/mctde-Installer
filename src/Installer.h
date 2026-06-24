@@ -28,16 +28,10 @@ using InstallProgress = std::function<void(const std::string& stage, int pct)>;
 // A pre-existing backup folder is preserved: the backup goes to a fresh numbered
 // sibling ("DATA-Backup-Packed (2)", ...) instead of being skipped or overwritten.
 //
-// When the install finishes, a non-Steam install's folder is renamed to
-// "DATA-mctde" (a sibling, next to any DATA-Backup-* copies) so it's clearly the
-// modded install. Steam installs keep the "DATA" name so Steam's own library
-// launch button still works. If `finalDataDir` is non-null it receives the folder
-// the install ended up in (the renamed "DATA-mctde", or the original path if the
-// install is on Steam or the rename couldn't happen).
+// The install operates in place: the folder keeps its original name (DATA).
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
                           std::string& message, const InstallProgress& progress = {},
-                          bool backupPacked = false, bool backupUnpacked = false,
-                          std::string* finalDataDir = nullptr);
+                          bool backupPacked = false, bool backupUnpacked = false);
 
 // Unpack-and-patch a DATA folder in place (no backups, no downloads):
 //   1. unpack dvdbnd -> loose files (+ nested tpf/hkx/chr textures)

@@ -159,13 +159,9 @@ static DWORD WINAPI InstallThread(LPVOID) {
     std::string msg;
     // Backups (DATA-Backup-Packed before unpack, DATA-Backup-Unpacked after) are
     // handled inside fullInstall at the right moments; a backup failure aborts.
-    std::string finalDir;
     InstallResult r = fullInstall(g_selDir, "", msg,   // "" -> embedded namelist
         [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); },
-        g_backupPacked, g_backupUnpacked, &finalDir);
-    // The install renames the folder to DATA-mctde; follow it so the Play button
-    // and the shortcuts point at where the game actually ended up.
-    if (r != InstallResult::Failed && !finalDir.empty()) g_selDir = finalDir;
+        g_backupPacked, g_backupUnpacked);
     PostMessageW(g_hwnd, WM_DONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
     g_installing = false;
     return 0;

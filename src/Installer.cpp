@@ -5,7 +5,6 @@
 #include "Extract.h"
 #include "Unpacker.h"
 
-#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -133,12 +132,10 @@ static ProgressFn dlProgress(const InstallProgress& progress, const std::string&
 
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
                           std::string& message, const InstallProgress& progress,
-                          bool backupPacked, bool backupUnpacked,
-                          std::string* finalDataDir) {
+                          bool backupPacked, bool backupUnpacked) {
     auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
 
     fs::path data(dataDir);
-    if (finalDataDir) *finalDataDir = dataDir;   // default: stays where it is
     if (!fs::exists(data / "DARKSOULS.exe")) {
         message = "no DARKSOULS.exe in " + dataDir;
         return InstallResult::Failed;
@@ -223,36 +220,6 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         {
             std::ofstream sa((data / "steam_appid.txt"), std::ios::binary | std::ios::trunc);
             sa.write("480", 3);
-        }
-
-        // 6. Rename the finished folder to DATA-mctde so the modded install is
-        //    clearly named (and sits alongside any DATA-Backup-* siblings).
-        //    Best-effort: if the name is already taken or the folder is briefly
-        //    in use, the install still succeeded in place.
-        //
-        //    Skip this for Steam installs: Steam's own library button launches
-        //    ...\DATA\DARKSOULS.exe, so renaming DATA would break it. Steam copies
-        //    keep the DATA name (detected the same way the rest of the app does —
-        //    a "steamapps" segment in the path).
-        std::string low = dataDir;
-        for (char& c : low) c = (char)std::tolower((unsigned char)c);
-        bool isSteam = low.find("steamapps") != std::string::npos;
-        if (isSteam) {
-            step("Steam install: keeping the DATA folder name.", 100);
-        } else if (data.filename() != "DATA-mctde") {
-            std::error_code ec;
-            fs::path target = parent / "DATA-mctde";
-            if (fs::exists(target, ec)) {
-                step("Note: a DATA-mctde folder already exists; left install in place.", 100);
-            } else {
-                fs::rename(data, target, ec);
-                if (!ec) {
-                    if (finalDataDir) *finalDataDir = target.string();
-                    step("Renamed install folder to DATA-mctde.", 100);
-                } else {
-                    step("Note: couldn't rename to DATA-mctde (folder in use); left in place.", 100);
-                }
-            }
         }
 
         step("Done!", 100);
