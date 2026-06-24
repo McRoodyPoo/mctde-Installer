@@ -7,10 +7,9 @@ patches `DARKSOULS.exe` to load them — the same job
 (UDSFM) does, reimplemented from the file-format spec so it carries no third-party
 licensing baggage and can be embedded directly in the mctde toolchain.
 
-> **Legal stance.** This tool ships **no game files and no decryption keys**. PTDE's
-> `dvdbnd` archives are *not* encrypted (unlike DS2/DS3), so no keys are involved at
-> all. It only transforms the archives already present in the user's own legally
-> owned installation, in place. Don't redistribute unpacked game assets.
+> **Note.** This is a clean-room reimplementation written from the file-format
+> spec. PTDE's `dvdbnd` archives aren't encrypted (unlike DS2/DS3), so there are
+> no decryption keys involved anywhere.
 
 ## What "unpacking" actually means
 
