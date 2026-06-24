@@ -1,0 +1,22 @@
+# Build output
+/build/
+/out/
+.vs/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Generated data
+/data/*.namelist
+!/data/.gitkeep
+
+# Local game data (never commit copyrighted game files)
+*.bhd5
+*.bdt
+DARKSOULS.exe
+
+# Test artifacts
+/testdata/hashes*.txt

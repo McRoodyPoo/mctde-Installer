@@ -1,0 +1,330 @@
+// Gui.cpp — native Win32 front-end for the mctde installer.
+//
+// Dark window with the Artorias banner, an Install/Cancel pair, and a progress
+// bar driven by fullInstall() on a worker thread. Matches the mctde-Launcher
+// look (same banner.bmp), no .NET/runtime.
+//
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <shlobj.h>
+#include <shellapi.h>
+#include <string>
+
+#include "gui_resource.h"
+#include "Detect.h"
+#include "Installer.h"
+
+using namespace mctde;
+
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
+
+// ---- control / message ids ----
+#define IDC_INSTALL   1001
+#define IDC_CANCEL    1002
+#define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 = indeterminate), lParam = new wchar_t[] status
+#define WM_DONE       (WM_APP + 2)   // wParam = success?1:0, lParam = new wchar_t[] message
+#define WM_NEEDFOLDER (WM_APP + 3)
+
+// ---- palette ----
+static const COLORREF CLR_BG    = RGB(24, 24, 28);
+static const COLORREF CLR_TEXT  = RGB(228, 228, 230);
+static const COLORREF CLR_BTN   = RGB(56, 56, 64);
+static const COLORREF CLR_BTNHI = RGB(82, 82, 94);
+static const COLORREF CLR_BTNDIS= RGB(40, 40, 46);
+static const COLORREF CLR_BAR   = RGB(150, 42, 42);
+static const COLORREF CLR_BARBG = RGB(46, 46, 54);
+static const COLORREF CLR_FRAME = RGB(92, 92, 104);
+
+static const int WIN_W = 524, WIN_H = 300, BANNER_H = 115;
+
+// ---- state ----
+static HINSTANCE g_inst = nullptr;
+static HBITMAP   g_banner = nullptr;
+static HFONT     g_font = nullptr, g_fontStatus = nullptr;
+static HWND      g_hwnd = nullptr, g_btnInstall = nullptr, g_btnCancel = nullptr;
+static int       g_pct = 0;
+static std::wstring g_status = L"Ready to install. Click Install to begin.";
+static volatile bool g_installing = false;
+static bool      g_done = false;       // finished successfully
+static std::string g_dataDir;          // resolved by the worker
+static HANDLE    g_folderEvent = nullptr;
+static std::string g_browseResult;
+
+static std::wstring widen(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    std::wstring w(n, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+static std::string narrow(const std::wstring& w) {
+    if (w.empty()) return "";
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(n, 0);
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
+}
+static std::wstring moduleDir() {
+    wchar_t buf[MAX_PATH] = {0};
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring p = buf;
+    size_t slash = p.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? L"" : p.substr(0, slash + 1);
+}
+static wchar_t* dupw(const std::wstring& s) {
+    wchar_t* p = new wchar_t[s.size() + 1];
+    wmemcpy(p, s.c_str(), s.size() + 1);
+    return p;
+}
+
+static void postStatus(int pct, const std::wstring& s) {
+    if (g_hwnd) PostMessageW(g_hwnd, WM_PROGRESS, (WPARAM)pct, (LPARAM)dupw(s));
+}
+
+// ---- worker ----
+static DWORD WINAPI InstallThread(LPVOID) {
+    postStatus(-1, L"Looking for your Dark Souls install...");
+    std::string data = findDataDir();
+    if (data.empty()) {
+        g_browseResult.clear();
+        ResetEvent(g_folderEvent);
+        PostMessageW(g_hwnd, WM_NEEDFOLDER, 0, 0);
+        WaitForSingleObject(g_folderEvent, INFINITE);
+        data = g_browseResult;
+        if (data.empty()) {
+            PostMessageW(g_hwnd, WM_DONE, 0, (LPARAM)dupw(L"Couldn't find DARKSOULS.exe. Put the installer in your game folder and retry."));
+            g_installing = false;
+            return 0;
+        }
+    }
+    g_dataDir = data;
+
+    std::string msg;
+    InstallResult r = fullInstall(data, "", msg,   // "" -> use the embedded namelist
+        [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); });
+
+    PostMessageW(g_hwnd, WM_DONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
+    g_installing = false;
+    return 0;
+}
+
+static std::string browseForData(HWND owner) {
+    BROWSEINFOW bi = {0};
+    bi.hwndOwner = owner;
+    bi.lpszTitle = L"Select your Dark Souls DATA folder (the one with DARKSOULS.exe)";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (!pidl) return "";
+    wchar_t path[MAX_PATH] = {0};
+    BOOL got = SHGetPathFromIDListW(pidl, path);
+    CoTaskMemFree(pidl);
+    if (!got) return "";
+    std::string s = narrow(path);
+    if (!s.empty() && GetFileAttributesA((s + "\\DARKSOULS.exe").c_str()) != INVALID_FILE_ATTRIBUTES)
+        return s;
+    return "";
+}
+
+static void startInstall() {
+    if (g_installing) return;
+    g_installing = true;
+    g_done = false;
+    g_pct = -1;
+    EnableWindow(g_btnInstall, FALSE);
+    EnableWindow(g_btnCancel, FALSE);
+    SetWindowTextW(g_btnInstall, L"Installing...");
+    if (HANDLE t = CreateThread(nullptr, 0, InstallThread, nullptr, 0, nullptr)) CloseHandle(t);
+}
+
+static void launchAndExit() {
+    std::wstring exe = widen(g_dataDir) + L"\\mctde_launcher.exe";
+    if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
+        exe = widen(g_dataDir) + L"\\DARKSOULS.exe";
+    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, widen(g_dataDir).c_str(), SW_SHOWNORMAL);
+    DestroyWindow(g_hwnd);
+}
+
+static void paintButton(DRAWITEMSTRUCT* di) {
+    bool pressed = (di->itemState & ODS_SELECTED) != 0;
+    bool disabled = (di->itemState & ODS_DISABLED) != 0;
+    COLORREF face = disabled ? CLR_BTNDIS : (pressed ? CLR_BTNHI : CLR_BTN);
+    HBRUSH fb = CreateSolidBrush(face);
+    FillRect(di->hDC, &di->rcItem, fb);
+    DeleteObject(fb);
+    HBRUSH frame = CreateSolidBrush(CLR_FRAME);
+    FrameRect(di->hDC, &di->rcItem, frame);
+    DeleteObject(frame);
+    wchar_t txt[48] = {0};
+    GetWindowTextW(di->hwndItem, txt, 48);
+    SetBkMode(di->hDC, TRANSPARENT);
+    SetTextColor(di->hDC, disabled ? RGB(120, 120, 124) : CLR_TEXT);
+    SelectObject(di->hDC, g_font);
+    DrawTextW(di->hDC, txt, -1, &di->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void paintWindow(HWND hWnd, HDC dc) {
+    RECT rc; GetClientRect(hWnd, &rc);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+    HGDIOBJ ob = SelectObject(mem, bmp);
+
+    HBRUSH bg = CreateSolidBrush(CLR_BG);
+    FillRect(mem, &rc, bg);
+    DeleteObject(bg);
+
+    if (g_banner) {
+        HDC bd = CreateCompatibleDC(mem);
+        HGDIOBJ o2 = SelectObject(bd, g_banner);
+        BITMAP b; GetObjectW(g_banner, sizeof(b), &b);
+        SetStretchBltMode(mem, HALFTONE);
+        StretchBlt(mem, 0, 0, WIN_W, BANNER_H, bd, 0, 0, b.bmWidth, b.bmHeight, SRCCOPY);
+        SelectObject(bd, o2);
+        DeleteDC(bd);
+    }
+
+    SetBkMode(mem, TRANSPARENT);
+    SetTextColor(mem, CLR_TEXT);
+    SelectObject(mem, g_fontStatus);
+    RECT tr = {24, BANNER_H + 20, WIN_W - 24, BANNER_H + 52};
+    DrawTextW(mem, g_status.c_str(), -1, &tr, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+
+    RECT br = {24, BANNER_H + 60, WIN_W - 24, BANNER_H + 82};
+    HBRUSH barbg = CreateSolidBrush(CLR_BARBG);
+    FillRect(mem, &br, barbg);
+    DeleteObject(barbg);
+    if (g_pct >= 0) {
+        RECT fr = br;
+        fr.right = br.left + (LONG)((br.right - br.left) * (g_pct / 100.0));
+        HBRUSH fbar = CreateSolidBrush(CLR_BAR);
+        FillRect(mem, &fr, fbar);
+        DeleteObject(fbar);
+    } else if (g_installing) {
+        HBRUSH faint = CreateSolidBrush(RGB(74, 52, 52));
+        FillRect(mem, &br, faint);
+        DeleteObject(faint);
+    }
+    HBRUSH frame = CreateSolidBrush(CLR_FRAME);
+    FrameRect(mem, &br, frame);
+    DeleteObject(frame);
+
+    BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, ob);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+}
+
+static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE:
+        g_btnCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            WIN_W - 224, BANNER_H + 96, 90, 34, hWnd, (HMENU)IDC_CANCEL, g_inst, nullptr);
+        g_btnInstall = CreateWindowW(L"BUTTON", L"Install", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            WIN_W - 124, BANNER_H + 96, 100, 34, hWnd, (HMENU)IDC_INSTALL, g_inst, nullptr);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hWnd, &ps);
+        paintWindow(hWnd, dc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_DRAWITEM:
+        if (wParam == IDC_INSTALL || wParam == IDC_CANCEL) {
+            paintButton((DRAWITEMSTRUCT*)lParam);
+            return TRUE;
+        }
+        break;
+    case WM_PROGRESS: {
+        g_pct = (int)(int)wParam;
+        wchar_t* p = (wchar_t*)lParam;
+        if (p) { g_status = p; delete[] p; }
+        RECT below = {0, BANNER_H, WIN_W, WIN_H};
+        InvalidateRect(hWnd, &below, FALSE);
+        return 0;
+    }
+    case WM_NEEDFOLDER:
+        g_browseResult = browseForData(hWnd);
+        SetEvent(g_folderEvent);
+        return 0;
+    case WM_DONE: {
+        g_installing = false;
+        wchar_t* m = (wchar_t*)lParam;
+        bool ok = (wParam == 1);
+        if (m) { g_status = m; delete[] m; }
+        g_pct = ok ? 100 : -1;
+        g_done = ok;
+        EnableWindow(g_btnInstall, TRUE);
+        EnableWindow(g_btnCancel, TRUE);
+        SetWindowTextW(g_btnInstall, ok ? L"Play" : L"Install");
+        SetWindowTextW(g_btnCancel, ok ? L"Close" : L"Cancel");
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDC_INSTALL:
+            if (g_done) launchAndExit();
+            else startInstall();
+            return 0;
+        case IDC_CANCEL:
+            if (!g_installing) DestroyWindow(hWnd);
+            return 0;
+        }
+        return 0;
+    case WM_CLOSE:
+        if (g_installing) return 0;   // don't close mid-install
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
+    g_inst = hInst;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    g_folderEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+
+    g_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    LOGFONTW lf = {0};
+    GetObjectW(g_font, sizeof(lf), &lf);
+    lf.lfHeight = -16;
+    g_fontStatus = CreateFontIndirectW(&lf);
+    g_banner = (HBITMAP)LoadImageW(hInst, MAKEINTRESOURCEW(IDB_BANNER), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+
+    WNDCLASSW wc = {0};
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInst;
+    wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = CreateSolidBrush(CLR_BG);
+    wc.lpszClassName = L"mctdeInstaller";
+    RegisterClassW(&wc);
+
+    RECT rc = {0, 0, WIN_W, WIN_H};
+    DWORD style = (WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX) | WS_CLIPCHILDREN;
+    AdjustWindowRect(&rc, style, FALSE);
+    int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
+    int sx = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2;
+    int sy = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
+
+    g_hwnd = CreateWindowW(L"mctdeInstaller", L"mctde Installer", style,
+                           sx, sy, ww, wh, nullptr, nullptr, hInst, nullptr);
+    ShowWindow(g_hwnd, nCmdShow);
+    UpdateWindow(g_hwnd);
+
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    if (g_banner) DeleteObject(g_banner);
+    if (g_fontStatus) DeleteObject(g_fontStatus);
+    return (int)msg.wParam;
+}
