@@ -142,12 +142,17 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
 
         std::string err;
 
+        // The download-source line doubles as the progress stage, so the URL is
+        // logged once and the repeated percentage updates don't spam the log.
+
         // 2. Mod payload -> extracted into DATA. The zip is DATA-relative
         //    (loose chr/, map/, ... plus DSFix's DINPUT8.dll/DSfix.ini/dsfix/),
         //    so it must land next to DARKSOULS.exe, not the game root.
-        step("Downloading the mod...", 0);
+        step("Downloading the mod...", -1);
+        std::string modFrom = std::string("    from ") + kModUrl;
+        step(modFrom, 0);
         fs::path modZip = data / "_mctde_mod.zip";
-        if (!downloadUrl(kModUrl, modZip.string(), err, dlProgress(progress, "Downloading the mod..."))) {
+        if (!downloadUrl(kModUrl, modZip.string(), err, dlProgress(progress, modFrom))) {
             message = "mod download failed: " + err;
             return InstallResult::Failed;
         }
@@ -156,9 +161,11 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         std::error_code ec; fs::remove(modZip, ec);
 
         // 3. mctde-Link -> DATA.
-        step("Downloading mctde-Link...", 0);
+        step("Downloading mctde-Link...", -1);
+        std::string linkFrom = std::string("    from ") + kLinkUrl;
+        step(linkFrom, 0);
         fs::path linkZip = data / "_mctde_link.zip";
-        if (!downloadUrl(kLinkUrl, linkZip.string(), err, dlProgress(progress, "Downloading mctde-Link..."))) {
+        if (!downloadUrl(kLinkUrl, linkZip.string(), err, dlProgress(progress, linkFrom))) {
             message = "mctde-Link download failed: " + err;
             return InstallResult::Failed;
         }
@@ -167,9 +174,11 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         fs::remove(linkZip, ec);
 
         // 4. Launcher -> DATA (a single exe, not an archive).
-        step("Downloading the launcher...", 0);
+        step("Downloading the launcher...", -1);
+        std::string launcherFrom = std::string("    from ") + kLauncherUrl;
+        step(launcherFrom, 0);
         if (!downloadUrl(kLauncherUrl, (data / "mctde_launcher.exe").string(), err,
-                         dlProgress(progress, "Downloading the launcher..."))) {
+                         dlProgress(progress, launcherFrom))) {
             message = "launcher download failed: " + err;
             return InstallResult::Failed;
         }

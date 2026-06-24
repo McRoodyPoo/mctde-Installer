@@ -32,6 +32,7 @@ using namespace mctde;
 #define IDC_INSTALL   1001
 #define IDC_CANCEL    1002
 #define IDC_BROWSE    1003
+#define IDC_LOG       1004
 #define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 indeterminate), lParam = new wchar_t[] status
 #define WM_DONE       (WM_APP + 2)   // wParam = success?1:0, lParam = new wchar_t[] message
 #define WM_FOUND      (WM_APP + 3)   // lParam = new GameInstall*
@@ -51,17 +52,18 @@ static const COLORREF CLR_LIST   = RGB(34, 34, 40);
 static const COLORREF CLR_LISTSEL= RGB(62, 62, 78);
 static const COLORREF CLR_STEAM  = RGB(120, 200, 120);   // green-ish "Steam" tag
 
-static const int WIN_W = 560, WIN_H = 490, BANNER_H = 115;
+static const int WIN_W = 560, WIN_H = 560, BANNER_H = 115;
+static const int LOG_TOP = BANNER_H + 188;   // scrolling log spans LOG_TOP .. WIN_H-80
 
 // ---- state ----
 static HINSTANCE g_inst = nullptr;
 static HBITMAP   g_banner = nullptr;
-static HFONT     g_font = nullptr, g_fontStatus = nullptr;
-static HWND      g_hwnd = nullptr, g_list = nullptr;
+static HFONT     g_font = nullptr, g_fontLog = nullptr;
+static HWND      g_hwnd = nullptr, g_list = nullptr, g_log = nullptr;
 static HWND      g_btnInstall = nullptr, g_btnCancel = nullptr, g_btnBrowse = nullptr;
-static HBRUSH    g_listBrush = nullptr;   // dark fill for the listbox's empty area
+static HBRUSH    g_listBrush = nullptr;   // dark fill for the listbox / log
 static int       g_pct = -1;
-static std::wstring g_status = L"Scanning for Dark Souls installs...";
+static std::wstring g_lastLog;            // last line appended (dedup repeated progress msgs)
 static volatile bool g_installing = false;
 static volatile bool g_scanning = false;
 static bool      g_done = false;
@@ -91,6 +93,16 @@ static wchar_t* dupw(const std::wstring& s) {
 }
 static void postStatus(int pct, const std::wstring& s) {
     if (g_hwnd) PostMessageW(g_hwnd, WM_PROGRESS, (WPARAM)pct, (LPARAM)dupw(s));
+}
+// Append one line to the scrolling log and keep the newest line in view.
+// Must be called on the UI thread (it talks to the edit control directly).
+static void logAppend(const std::wstring& line) {
+    if (!g_log) return;
+    int len = GetWindowTextLengthW(g_log);
+    SendMessageW(g_log, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    std::wstring s = line + L"\r\n";
+    SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)s.c_str());
+    SendMessageW(g_log, WM_VSCROLL, SB_BOTTOM, 0);
 }
 
 // ---- worker threads ----
@@ -304,10 +316,7 @@ static void paintWindow(HWND hWnd, HDC dc) {
     RECT lr = {24, BANNER_H + 8, WIN_W - 24, BANNER_H + 26};
     DrawTextW(mem, L"Select the install to patch:", -1, &lr, DT_LEFT | DT_SINGLELINE);
 
-    SelectObject(mem, g_fontStatus);
-    SetTextColor(mem, CLR_TEXT);
-    RECT tr = {24, BANNER_H + 188, WIN_W - 24, WIN_H - 80};   // ~6 lines for long errors
-    DrawTextW(mem, g_status.c_str(), -1, &tr, DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL);
+    // The status/log area is a real child edit control (g_log); it paints itself.
 
     RECT br = {24, WIN_H - 72, WIN_W - 24, WIN_H - 56};
     HBRUSH barbg = CreateSolidBrush(CLR_BARBG);
@@ -349,6 +358,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             WIN_W - 124, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_INSTALL, g_inst, nullptr);
         EnableWindow(g_btnInstall, FALSE);   // until something is selected
         g_listBrush = CreateSolidBrush(CLR_LIST);
+        g_log = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+            24, LOG_TOP, WIN_W - 48, (WIN_H - 80) - LOG_TOP, hWnd, (HMENU)IDC_LOG, g_inst, nullptr);
+        SendMessageW(g_log, WM_SETFONT, (WPARAM)g_fontLog, TRUE);
+        logAppend(L"Scanning for Dark Souls installs...");
         g_scanning = true;
         if (HANDLE t = CreateThread(nullptr, 0, ScanThread, nullptr, 0, nullptr)) CloseHandle(t);
         return 0;
@@ -370,6 +384,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         SetTextColor(dc, CLR_TEXT);
         return (LRESULT)g_listBrush;
     }
+    case WM_CTLCOLORSTATIC:   // read-only edit (the log) paints via this message
+        if ((HWND)lParam == g_log) {
+            HDC dc = (HDC)wParam;
+            SetBkColor(dc, CLR_LIST);
+            SetTextColor(dc, CLR_TEXT);
+            return (LRESULT)g_listBrush;
+        }
+        break;
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT* di = (DRAWITEMSTRUCT*)lParam;
         if (di->CtlType == ODT_LISTBOX) { paintListItem(di); return TRUE; }
@@ -378,30 +400,41 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_FOUND: {
         GameInstall* gi = (GameInstall*)lParam;
-        if (gi) { addInstall(*gi); delete gi; InvalidateRect(hWnd, nullptr, FALSE); }
+        if (gi) {
+            addInstall(*gi);
+            const wchar_t* tag = gi->steam ? L"Steam" : L"non-Steam";
+            const wchar_t* st = gi->state == GameState::Packed ? L"packed"
+                              : gi->state == GameState::Unpacked ? L"unpacked" : L"unknown";
+            logAppend(std::wstring(L"Found [") + tag + L", " + st + L"]: " + widen(gi->dataDir));
+            delete gi;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
         return 0;
     }
     case WM_SCANDONE:
         g_scanning = false;
-        g_status = g_installs.empty()
+        logAppend(g_installs.empty()
             ? L"No Dark Souls install found. Click Browse to locate DARKSOULS.exe."
             : L"Found " + std::to_wstring(g_installs.size()) +
-              L" install(s). Pick one and click Install.";
+              L" install(s). Pick one and click Install.");
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     case WM_PROGRESS: {
         g_pct = (int)wParam;
         wchar_t* p = (wchar_t*)lParam;
-        if (p) { g_status = p; delete[] p; }
-        RECT below = {0, BANNER_H + 180, WIN_W, WIN_H};
-        InvalidateRect(hWnd, &below, FALSE);
+        if (p) {
+            if (g_lastLog != p) { logAppend(p); g_lastLog = p; }   // skip repeated % updates
+            delete[] p;
+        }
+        RECT bar = {0, WIN_H - 76, WIN_W, WIN_H - 52};   // repaint just the progress bar
+        InvalidateRect(hWnd, &bar, FALSE);
         return 0;
     }
     case WM_DONE: {
         g_installing = false;
         wchar_t* m = (wchar_t*)lParam;
         bool ok = (wParam == 1);
-        if (m) { g_status = m; delete[] m; }
+        if (m) { logAppend(m); g_lastLog = m; delete[] m; }
         g_pct = ok ? 100 : -1;
         g_done = ok;
         EnableWindow(g_btnInstall, TRUE);
@@ -470,10 +503,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
     InitCommonControlsEx(&icc);
 
     g_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    LOGFONTW lf = {0};
-    GetObjectW(g_font, sizeof(lf), &lf);
-    lf.lfHeight = -15;
-    g_fontStatus = CreateFontIndirectW(&lf);
+    LOGFONTW lf = {0};               // monospace font for the console-style log
+    lf.lfHeight = -13;
+    lstrcpynW(lf.lfFaceName, L"Consolas", 32);
+    g_fontLog = CreateFontIndirectW(&lf);
     g_banner = (HBITMAP)LoadImageW(hInst, MAKEINTRESOURCEW(IDB_BANNER), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
 
     WNDCLASSW wc = {0};
@@ -503,6 +536,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int nCmdShow) {
         DispatchMessageW(&msg);
     }
     if (g_banner) DeleteObject(g_banner);
-    if (g_fontStatus) DeleteObject(g_fontStatus);
+    if (g_fontLog) DeleteObject(g_fontLog);
     return (int)msg.wParam;
 }
