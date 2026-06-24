@@ -1,33 +1,33 @@
 # mctde-Installer
 
-A clean-room, native C++ installer for the **mctde** Dark Souls: Prepare to Die
-Edition (PTDE) mod. It unpacks the game's `dvdbnd` archives into loose files and
-patches `DARKSOULS.exe` to load them. It's the same job
+`mctde-Installer` is a native C++ unpacker and installer for the **mctde** Dark
+Souls: Prepare to Die Edition (PTDE) mod setup. It does in C++ what
 [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding)
-(UDSFM) does, reimplemented from the file-format spec so it can be embedded
-directly in the mctde toolchain without taking on those projects' licensing
-obligations.
+(UDSFM) does: it unpacks the game's `dvdbnd` archives into loose files and patches
+`DARKSOULS.exe` to load them, so the engine reads moddable loose files instead of
+the packed archives. Being native C++ lets it ship as a single tool inside the
+mctde toolchain.
 
-> **Note.** This is a clean-room reimplementation written from the file-format
-> spec. PTDE's `dvdbnd` archives aren't encrypted (unlike DS2/DS3), so there are
-> no decryption keys involved anywhere.
+## What it does
 
-## What "unpacking" actually means
+`install` runs the whole flow in one shot — back up the originals, unpack, patch
+the exe, delete the archives — and is safe to re-run. Under the hood that's three
+steps:
 
-Reverse-engineered from UDSFM, the operation is three coordinated steps:
-
-1. **Unpack** `dvdbnd0-3.bhd5` / `.bdt` into 18 top-level directories:
-   `chr event facegen font map menu msg mtd obj other param paramdef parts remo
-   script sfx shader sound`. DCX-compressed entries are decompressed on the way out.
-2. **Patch `DARKSOULS.exe`** so the engine reads loose files:
-   - UTF-16LE virtual-drive string rewrites: `dvdbnd0:` → `dvdroot:`,
-     `tpfbnd:` → `map:/tx` (equal length, patched in place).
-   - A 2-byte code patch (`EB 12`) that disables the DCX-decompression path so the
-     engine treats the loose files as uncompressed.
+1. **Unpack** `dvdbnd0-3.bhd5` / `.bdt` into the 18 top-level game directories
+   (`chr event facegen font map menu msg mtd obj other param paramdef parts remo
+   script sfx shader sound`), decompressing DCX entries on the way out. Nested
+   `tpfbhd` / `hkxbhd` / `chrtpf` archives are then unpacked a second level down
+   into `tpf` / `hkx`.
+2. **Patch `DARKSOULS.exe`** so the engine reads loose files: UTF-16LE
+   virtual-drive string rewrites (`dvdbnd0:` → `dvdroot:`, `tpfbnd:` → `map:/tx`,
+   patched in place since they're equal length) and a 2-byte code patch (`EB 12`)
+   that turns off the DCX-decompression path. The exe is checked by SHA-256 first,
+   so only a known clean build is ever patched.
 3. **Delete the archives** so the engine falls back to the loose files.
 
-The exe is verified by **SHA-256** before patching, so an unknown/wrong build is
-never touched.
+It's idempotent: originals are backed up to `mctde-backup/`, and a
+`.mctde-unpacked` sentinel makes re-runs no-ops.
 
 ## File formats (PTDE)
 
@@ -65,36 +65,36 @@ mctde-installer install <DATA dir> [namelist]   full flow (backup, unpack, patch
 mctde-installer unpack  <DATA dir> <out> [nl]    just unpack dvdbnd + nested archives
 mctde-installer patchexe <inExe> <outExe>        just patch a clean DARKSOULS.exe
 ```
+
 Diagnostics: `bhd5`, `hashes`, `hashstr`, `cover`, `dcx`, `extract`, `nested`,
 `bnd3`, `diff`.
-
-`install` is idempotent: it backs up the originals to `mctde-backup/`, unpacks
-in place, patches the exe, deletes the archives, and drops a `.mctde-unpacked`
-sentinel so re-runs are no-ops.
 
 ## Status
 
 **Complete and validated against a real PTDE install + a reference unpack.**
+
 - Two-level unpack (dvdbnd → loose, then inner `tpfbhd`/`hkxbhd`/`chrtpf` →
   `tpf`/`hkx`) reproduces the reference tree exactly — 13,302/13,302
   dvdbnd-derived files, names and content (SHA-256) verified.
-- The exe patch reproduces the known UDSFM-patched `DARKSOULS.exe` byte-for-byte
-  (SHA-gated to the known clean build; the input is never modified).
-- The one missing-from-game header (`c4110.chrtpfbhd`) is reconstructed.
-
-Polish remaining: the namelist is currently a sibling `data/` file; for a
-single-file distributable it should be embedded or resolved relative to the
-installer exe rather than the working directory.
+- The exe patch matches the known UDSFM-patched `DARKSOULS.exe` byte-for-byte.
+- The one header missing from the game files (`c4110.chrtpfbhd`) is reconstructed.
 
 ## Credits
 
-Enormous thanks to **HotPocketRemix** (UDSFM) and **TKGP/JKAnderson**
-(SoulsFormats, UXM, Yabber), whose reverse-engineering of the Dark Souls file
-formats this entire installer is built on — and to the wider Dark Souls modding
-community that documented these formats over the years. None of this would exist
-without their work.
+`mctde-Installer` is a C++ take on UnpackDarkSoulsForModding, built up from the
+file formats. It stands on a lot of reverse-engineering work by the Dark Souls
+modding community:
 
-This is an independent clean-room reimplementation written from the format spec;
-no code from those projects is included here. That's a licensing boundary, not a
-statement about their work — go use UDSFM, SoulsFormats, UXM, and Yabber. They're
-excellent.
+- **HotPocketRemix** — [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding),
+  the original this follows, and the reconstructed `c4110.chrtpfbhd` header (the
+  one texture header missing from the game files).
+- **Meowmaritus** & **Wulf2k** — reverse-engineered the dvdbnd filename list,
+  embedded here as the namelist.
+- **TKGP / JKAnderson** — [SoulsFormats](https://github.com/JKAnderson/SoulsFormats),
+  UXM, and Yabber, where the BHD5 / DCX / BND3 format details come from.
+- **Burton Radons** — BND3 format reverse-engineering.
+- **Sean Pesce** — DsGameFiles (`FileList.h`), where the namelist was collated.
+- **Rich Geldreich** — [miniz](https://github.com/richgel999/miniz), public domain
+  (Unlicense), vendored in `third_party/`.
+
+Original game by **FromSoftware** and **Bandai Namco**.

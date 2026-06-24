@@ -15,6 +15,3 @@ Dark Souls modding community — thanks to everyone below:
 - **Sean Pesce** — DsGameFiles (`FileList.h`), where the namelist was collated.
 - **Rich Geldreich** — [miniz](https://github.com/richgel999/miniz), public
   domain (Unlicense), vendored in `third_party/`.
-
-The installer's own source is original work. PTDE's archives aren't encrypted,
-so no decryption keys are involved anywhere in here.
