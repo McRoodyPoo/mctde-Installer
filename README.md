@@ -2,7 +2,7 @@
 
 A clean-room, native C++ installer for the **mctde** Dark Souls: Prepare to Die
 Edition (PTDE) mod. It unpacks the game's `dvdbnd` archives into loose files and
-patches `DARKSOULS.exe` to load them — the same job
+patches `DARKSOULS.exe` to load them. It's the same job
 [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding)
 (UDSFM) does, reimplemented from the file-format spec so it can be embedded
 directly in the mctde toolchain without taking on those projects' licensing
