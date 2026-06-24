@@ -25,11 +25,17 @@ using InstallProgress = std::function<void(const std::string& stage, int pct)>;
 //                      taken before unpacking; only if the install is packed)
 //   backupUnpacked -> "DATA-Backup-Unpacked" (a copy of the unpacked DATA,
 //                      taken after unpacking and before the mod is applied)
-// An existing backup folder is left untouched (never overwritten with a
-// modified copy).
+// A pre-existing backup folder is preserved: the backup goes to a fresh numbered
+// sibling ("DATA-Backup-Packed (2)", ...) instead of being skipped or overwritten.
+//
+// When the install finishes, the modded folder is renamed to "DATA-mctde" (a
+// sibling, next to any DATA-Backup-* copies) so it's clearly the modded install.
+// If `finalDataDir` is non-null it receives the folder the install ended up in
+// (the renamed "DATA-mctde", or the original path if the rename couldn't happen).
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
                           std::string& message, const InstallProgress& progress = {},
-                          bool backupPacked = false, bool backupUnpacked = false);
+                          bool backupPacked = false, bool backupUnpacked = false,
+                          std::string* finalDataDir = nullptr);
 
 // Unpack-and-patch a DATA folder in place (no backups, no downloads):
 //   1. unpack dvdbnd -> loose files (+ nested tpf/hkx/chr textures)

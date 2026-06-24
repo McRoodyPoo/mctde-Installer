@@ -132,10 +132,12 @@ static ProgressFn dlProgress(const InstallProgress& progress, const std::string&
 
 InstallResult fullInstall(const std::string& dataDir, const std::string& namelistPath,
                           std::string& message, const InstallProgress& progress,
-                          bool backupPacked, bool backupUnpacked) {
+                          bool backupPacked, bool backupUnpacked,
+                          std::string* finalDataDir) {
     auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
 
     fs::path data(dataDir);
+    if (finalDataDir) *finalDataDir = dataDir;   // default: stays where it is
     if (!fs::exists(data / "DARKSOULS.exe")) {
         message = "no DARKSOULS.exe in " + dataDir;
         return InstallResult::Failed;
@@ -220,6 +222,26 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         {
             std::ofstream sa((data / "steam_appid.txt"), std::ios::binary | std::ios::trunc);
             sa.write("480", 3);
+        }
+
+        // 6. Rename the finished folder to DATA-mctde so the modded install is
+        //    clearly named (and sits alongside any DATA-Backup-* siblings).
+        //    Best-effort: if the name is already taken or the folder is briefly
+        //    in use, the install still succeeded in place.
+        if (data.filename() != "DATA-mctde") {
+            std::error_code ec;
+            fs::path target = parent / "DATA-mctde";
+            if (fs::exists(target, ec)) {
+                step("Note: a DATA-mctde folder already exists; left install in place.", 100);
+            } else {
+                fs::rename(data, target, ec);
+                if (!ec) {
+                    if (finalDataDir) *finalDataDir = target.string();
+                    step("Renamed install folder to DATA-mctde.", 100);
+                } else {
+                    step("Note: couldn't rename to DATA-mctde (folder in use); left in place.", 100);
+                }
+            }
         }
 
         step("Done!", 100);
