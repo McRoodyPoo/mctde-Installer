@@ -116,16 +116,22 @@ Diagnostics: `bhd5`, `bnd3`, `dcx`, `extract`, `extractzip`, `nested`, `detect`,
 file formats. It stands on a lot of reverse-engineering work by the Dark Souls
 modding community:
 
-- **HotPocketRemix** — [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding),
+- **[HotPocketRemix](https://github.com/HotPocketRemix)** —
+  [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding),
   the original this follows, and the reconstructed `c4110.chrtpfbhd` header (the
   one texture header missing from the game files).
-- **Meowmaritus** & **Wulf2k** — reverse-engineered the dvdbnd filename list,
-  embedded here as the namelist.
-- **TKGP / JKAnderson** — [SoulsFormats](https://github.com/JKAnderson/SoulsFormats),
-  UXM, and Yabber, where the BHD5 / DCX / BND3 format details come from.
+- **[Meowmaritus](https://github.com/Meowmaritus)** &
+  **[Wulf2k](https://github.com/Wulf2k)** — reverse-engineered the dvdbnd filename
+  list, embedded here as the namelist.
+- **[TKGP / JKAnderson](https://github.com/JKAnderson)** —
+  [SoulsFormats](https://github.com/JKAnderson/SoulsFormats), UXM, and Yabber,
+  where the BHD5 / DCX / BND3 format details come from.
 - **Burton Radons** — BND3 format reverse-engineering.
-- **Sean Pesce** — DsGameFiles (`FileList.h`), where the namelist was collated.
-- **Rich Geldreich** — [miniz](https://github.com/richgel999/miniz), public domain
-  (Unlicense), vendored in `third_party/`.
+- **[Sean Pesce](https://github.com/SeanPesce)** —
+  [DsGameFiles](https://github.com/SeanPesce/Dark-Souls-Game-Files-Lib)
+  (`FileList.h`), where the namelist was collated.
+- **[Rich Geldreich](https://github.com/richgel999)** —
+  [miniz](https://github.com/richgel999/miniz), public domain (Unlicense),
+  vendored in `third_party/`.
 
 Original game by **FromSoftware** and **Bandai Namco**.
