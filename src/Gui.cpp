@@ -15,9 +15,12 @@
 #include <string>
 #include <vector>
 
+#include <cstdint>
+
 #include "gui_resource.h"
 #include "Detect.h"
 #include "Installer.h"
+#include "Update.h"
 
 using namespace mctde;
 
@@ -33,10 +36,14 @@ using namespace mctde;
 #define IDC_CANCEL    1002
 #define IDC_BROWSE    1003
 #define IDC_LOG       1004
+#define IDC_REFRESH   1005
 #define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 indeterminate), lParam = new wchar_t[] status
 #define WM_DONE       (WM_APP + 2)   // wParam = success?1:0, lParam = new wchar_t[] message
 #define WM_FOUND      (WM_APP + 3)   // lParam = new GameInstall*
 #define WM_SCANDONE   (WM_APP + 4)
+#define WM_UPDATE_AVAIL (WM_APP + 5) // lParam = new wchar_t[] latest version
+#define WM_UPDATE_NONE  (WM_APP + 6) // no update (or check failed) -> just scan
+#define WM_UPDATE_DONE  (WM_APP + 7) // wParam = ok?1:0, lParam = new wchar_t[] message
 
 // ---- palette ----
 static const COLORREF CLR_BG     = RGB(24, 24, 28);
@@ -60,12 +67,13 @@ static HINSTANCE g_inst = nullptr;
 static HBITMAP   g_banner = nullptr;
 static HFONT     g_font = nullptr, g_fontLog = nullptr;
 static HWND      g_hwnd = nullptr, g_list = nullptr, g_log = nullptr;
-static HWND      g_btnInstall = nullptr, g_btnCancel = nullptr, g_btnBrowse = nullptr;
+static HWND      g_btnInstall = nullptr, g_btnCancel = nullptr, g_btnBrowse = nullptr, g_btnRefresh = nullptr;
 static HBRUSH    g_listBrush = nullptr;   // dark fill for the listbox / log
 static int       g_pct = -1;
 static std::wstring g_lastLog;            // last line appended (dedup repeated progress msgs)
 static volatile bool g_installing = false;
 static volatile bool g_scanning = false;
+static volatile bool g_updating = false;   // self-update download in progress
 static bool      g_done = false;
 static std::vector<GameInstall> g_installs;
 static std::string g_selDir;   // the install the worker is operating on
@@ -120,6 +128,30 @@ static DWORD WINAPI ScanThread(LPVOID) {
         if (g_hwnd) PostMessageW(g_hwnd, WM_FOUND, 0, (LPARAM)new GameInstall(gi));
     });
     if (g_hwnd) PostMessageW(g_hwnd, WM_SCANDONE, 0, 0);
+    return 0;
+}
+
+// Check latest.txt for a newer installer; the UI thread decides what to do next.
+static DWORD WINAPI UpdateCheckThread(LPVOID) {
+    std::string latest = fetchLatestInstallerVersion();
+    if (!latest.empty() && isNewer(latest, kInstallerVersion))
+        PostMessageW(g_hwnd, WM_UPDATE_AVAIL, 0, (LPARAM)dupw(widen(latest)));
+    else
+        PostMessageW(g_hwnd, WM_UPDATE_NONE, 0, 0);
+    return 0;
+}
+
+// Download the new installer, swap it in, and relaunch it. On success the UI
+// thread closes this (now-stale) instance.
+static DWORD WINAPI SelfUpdateThread(LPVOID) {
+    std::string err;
+    bool ok = selfUpdate(err, [](uint64_t got, uint64_t total) -> bool {
+        postStatus(total ? (int)(got * 100 / total) : -1, L"Downloading installer update...");
+        return true;
+    });
+    PostMessageW(g_hwnd, WM_UPDATE_DONE, (WPARAM)(ok ? 1 : 0),
+                 (LPARAM)dupw(ok ? L"Update ready. Restarting the installer..."
+                                 : widen("Update failed (" + err + "). Continuing with this version.")));
     return 0;
 }
 
@@ -215,6 +247,21 @@ static void addInstall(const GameInstall& gi) {
     }
 }
 
+// Clear the current results and (re)launch the scan worker. Used on startup and
+// by the Refresh button; ignored while a scan or install is already running.
+static void startScan() {
+    if (g_scanning || g_installing) return;
+    g_installs.clear();
+    SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
+    EnableWindow(g_btnInstall, FALSE);
+    EnableWindow(g_btnRefresh, FALSE);
+    EnableWindow(g_btnBrowse, TRUE);   // browsing is available during/after a scan
+    g_scanning = true;
+    logAppend(L"Scanning for Dark Souls installs...");
+    if (HANDLE t = CreateThread(nullptr, 0, ScanThread, nullptr, 0, nullptr)) CloseHandle(t);
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+}
+
 static void startInstall() {
     int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
     if (sel < 0 || sel >= (int)g_installs.size()) return;
@@ -225,17 +272,124 @@ static void startInstall() {
     EnableWindow(g_btnInstall, FALSE);
     EnableWindow(g_btnCancel, FALSE);
     EnableWindow(g_btnBrowse, FALSE);
+    EnableWindow(g_btnRefresh, FALSE);
     EnableWindow(g_list, FALSE);
     SetWindowTextW(g_btnInstall, L"Installing...");
     if (HANDLE t = CreateThread(nullptr, 0, InstallThread, nullptr, 0, nullptr)) CloseHandle(t);
 }
 
-static void launchAndExit() {
+// The exe a shortcut / Play button should launch: the mctde launcher if present,
+// otherwise the bare game exe.
+static std::wstring resolveLaunchExe() {
     std::wstring exe = widen(g_selDir) + L"\\mctde_launcher.exe";
     if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
         exe = widen(g_selDir) + L"\\DARKSOULS.exe";
+    return exe;
+}
+
+static void launchAndExit() {
+    std::wstring exe = resolveLaunchExe();
     ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, widen(g_selDir).c_str(), SW_SHOWNORMAL);
     DestroyWindow(g_hwnd);
+}
+
+// Resolve a CSIDL folder (e.g. the user's Desktop or Start Menu\Programs).
+static std::wstring knownDir(int csidl) {
+    wchar_t path[MAX_PATH] = {0};
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, csidl, nullptr, SHGFP_TYPE_CURRENT, path)))
+        return path;
+    return L"";
+}
+
+// Write a .lnk pointing at targetExe (icon pulled from the exe, working dir set so
+// relative game files resolve). Returns false on any COM failure.
+static bool createShortcut(const std::wstring& targetExe, const std::wstring& workingDir,
+                           const std::wstring& lnkPath, const std::wstring& desc) {
+    IShellLinkW* link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_IShellLinkW, (void**)&link)))
+        return false;
+    link->SetPath(targetExe.c_str());
+    link->SetWorkingDirectory(workingDir.c_str());
+    link->SetDescription(desc.c_str());
+    link->SetIconLocation(targetExe.c_str(), 0);
+    IPersistFile* pf = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, (void**)&pf))) {
+        ok = SUCCEEDED(pf->Save(lnkPath.c_str(), TRUE));
+        pf->Release();
+    }
+    link->Release();
+    return ok;
+}
+
+// After a successful install, ask whether to drop a Desktop and/or Start Menu
+// shortcut for the freshly patched copy, then create whichever were chosen.
+static void offerShortcuts(HWND owner) {
+    TASKDIALOGCONFIG tc = {0};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = owner;
+    tc.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    tc.pszWindowTitle = L"mctde Installer";
+    tc.pszMainIcon = TD_INFORMATION_ICON;
+    tc.pszMainInstruction = L"Create shortcuts?";
+    tc.pszContent = L"Add a shortcut to launch Dark Souls with mctde-Link.";
+
+    TASKDIALOG_BUTTON radios[4] = {
+        {301, L"Desktop and Start Menu"},
+        {302, L"Desktop only"},
+        {303, L"Start Menu only"},
+        {304, L"Don't create shortcuts"},
+    };
+    tc.pRadioButtons = radios;
+    tc.cRadioButtons = 4;
+    tc.nDefaultRadioButton = 301;
+    tc.dwCommonButtons = TDCBF_OK_BUTTON;
+
+    int pressed = 0, radio = 301;
+    if (FAILED(TaskDialogIndirect(&tc, &pressed, &radio, nullptr))) return;
+    if (radio == 304) return;
+
+    const bool wantDesktop   = (radio == 301 || radio == 302);
+    const bool wantStartMenu = (radio == 301 || radio == 303);
+    const std::wstring exe     = resolveLaunchExe();
+    const std::wstring workdir = widen(g_selDir);
+    const std::wstring name    = L"Dark Souls (mctde-Link).lnk";
+    const std::wstring desc    = L"Launch Dark Souls with mctde-Link";
+
+    // We run elevated, so write to the all-users (common) locations: the shortcut
+    // shows up for every account, not just the admin who ran the installer.
+    int made = 0;
+    if (wantDesktop) {
+        std::wstring d = knownDir(CSIDL_COMMON_DESKTOPDIRECTORY);
+        if (!d.empty() && createShortcut(exe, workdir, d + L"\\" + name, desc)) made++;
+    }
+    if (wantStartMenu) {
+        std::wstring p = knownDir(CSIDL_COMMON_PROGRAMS);
+        if (!p.empty() && createShortcut(exe, workdir, p + L"\\" + name, desc)) made++;
+    }
+    logAppend(made ? L"Created shortcut(s)." : L"Could not create shortcuts.");
+}
+
+// Ask whether to pull a newer installer before continuing. Yes is the default.
+static bool askInstallerUpdate(HWND owner, const std::wstring& latest) {
+    std::wstring content =
+        L"You're running installer v" + widen(kInstallerVersion) + L", but v" + latest +
+        L" is available.\n\nUpdating makes sure you install the latest mctde-Link. "
+        L"The installer will download the new version and restart itself.";
+    TASKDIALOGCONFIG tc = {0};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = owner;
+    tc.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    tc.pszWindowTitle = L"mctde Installer";
+    tc.pszMainIcon = TD_INFORMATION_ICON;
+    tc.pszMainInstruction = L"A newer installer is available";
+    tc.pszContent = content.c_str();
+    tc.dwCommonButtons = TDCBF_YES_BUTTON | TDCBF_NO_BUTTON;
+    tc.nDefaultButton = IDYES;
+    int pressed = 0;
+    if (FAILED(TaskDialogIndirect(&tc, &pressed, nullptr, nullptr))) return false;
+    return pressed == IDYES;
 }
 
 // ---- drawing ----
@@ -361,6 +515,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             24, BANNER_H + 28, WIN_W - 48, 150, hWnd, (HMENU)IDC_LIST, g_inst, nullptr);
         g_btnBrowse = CreateWindowW(L"BUTTON", L"Browse...", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
             24, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_BROWSE, g_inst, nullptr);
+        g_btnRefresh = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            130, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_REFRESH, g_inst, nullptr);
+        // Browse and Refresh stay disabled until the update check + scan resolve,
+        // so a browsed-in path can't be wiped by the scan that follows the check.
+        EnableWindow(g_btnBrowse, FALSE);
+        EnableWindow(g_btnRefresh, FALSE);
         g_btnCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
             WIN_W - 224, WIN_H - 50, 90, 34, hWnd, (HMENU)IDC_CANCEL, g_inst, nullptr);
         g_btnInstall = CreateWindowW(L"BUTTON", L"Install", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
@@ -371,9 +531,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
             24, LOG_TOP, WIN_W - 48, (WIN_H - 80) - LOG_TOP, hWnd, (HMENU)IDC_LOG, g_inst, nullptr);
         SendMessageW(g_log, WM_SETFONT, (WPARAM)g_fontLog, TRUE);
-        logAppend(L"Scanning for Dark Souls installs...");
-        g_scanning = true;
-        if (HANDLE t = CreateThread(nullptr, 0, ScanThread, nullptr, 0, nullptr)) CloseHandle(t);
+        cleanupOldSelf();   // remove the previous exe a self-update left behind
+        logAppend(L"Checking for installer updates...");
+        if (HANDLE t = CreateThread(nullptr, 0, UpdateCheckThread, nullptr, 0, nullptr)) CloseHandle(t);
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -420,8 +580,45 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         return 0;
     }
+    case WM_UPDATE_NONE:
+        startScan();
+        return 0;
+    case WM_UPDATE_AVAIL: {
+        wchar_t* v = (wchar_t*)lParam;
+        std::wstring latest = v ? v : L"";
+        if (v) delete[] v;
+        logAppend(L"Installer update available: v" + widen(kInstallerVersion) + L" -> v" + latest);
+        if (askInstallerUpdate(hWnd, latest)) {
+            g_updating = true;
+            g_pct = -1;
+            EnableWindow(g_btnInstall, FALSE);
+            EnableWindow(g_btnRefresh, FALSE);
+            EnableWindow(g_btnBrowse, FALSE);
+            logAppend(L"Downloading the latest installer...");
+            if (HANDLE t = CreateThread(nullptr, 0, SelfUpdateThread, nullptr, 0, nullptr)) CloseHandle(t);
+        } else {
+            logAppend(L"Skipped the update; using this installer.");
+            startScan();
+        }
+        return 0;
+    }
+    case WM_UPDATE_DONE: {
+        g_updating = false;
+        wchar_t* m = (wchar_t*)lParam;
+        bool ok = (wParam == 1);
+        if (m) { logAppend(m); g_lastLog = m; delete[] m; }
+        if (ok) {
+            DestroyWindow(hWnd);   // the freshly downloaded installer is taking over
+        } else {
+            g_pct = -1;
+            startScan();           // fall back to running this version
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        return 0;
+    }
     case WM_SCANDONE:
         g_scanning = false;
+        if (!g_installing && !g_done) EnableWindow(g_btnRefresh, TRUE);
         logAppend(g_installs.empty()
             ? L"No Dark Souls install found. Click Browse to locate DARKSOULS.exe."
             : L"Found " + std::to_wstring(g_installs.size()) +
@@ -448,10 +645,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_done = ok;
         EnableWindow(g_btnInstall, TRUE);
         EnableWindow(g_btnCancel, TRUE);
-        if (!ok) { EnableWindow(g_btnBrowse, TRUE); EnableWindow(g_list, TRUE); }
+        if (!ok) {
+            EnableWindow(g_btnBrowse, TRUE);
+            EnableWindow(g_list, TRUE);
+            if (!g_scanning) EnableWindow(g_btnRefresh, TRUE);
+        }
         SetWindowTextW(g_btnInstall, ok ? L"Play" : L"Install");
         SetWindowTextW(g_btnCancel, ok ? L"Close" : L"Cancel");
         InvalidateRect(hWnd, nullptr, FALSE);
+        if (ok) offerShortcuts(hWnd);
         return 0;
     }
     case WM_COMMAND:
@@ -488,13 +690,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             return 0;
+        case IDC_REFRESH:
+            if (!g_installing && !g_scanning && !g_updating && !g_done) startScan();
+            return 0;
         case IDC_CANCEL:
-            if (!g_installing) DestroyWindow(hWnd);
+            if (!g_installing && !g_updating) DestroyWindow(hWnd);
             return 0;
         }
         return 0;
     case WM_CLOSE:
-        if (g_installing) return 0;
+        if (g_installing || g_updating) return 0;
         DestroyWindow(hWnd);
         return 0;
     case WM_DESTROY:
