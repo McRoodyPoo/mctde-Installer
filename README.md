@@ -4,8 +4,9 @@ A clean-room, native C++ installer for the **mctde** Dark Souls: Prepare to Die
 Edition (PTDE) mod. It unpacks the game's `dvdbnd` archives into loose files and
 patches `DARKSOULS.exe` to load them — the same job
 [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding)
-(UDSFM) does, reimplemented from the file-format spec so it carries no third-party
-licensing baggage and can be embedded directly in the mctde toolchain.
+(UDSFM) does, reimplemented from the file-format spec so it can be embedded
+directly in the mctde toolchain without taking on those projects' licensing
+obligations.
 
 > **Note.** This is a clean-room reimplementation written from the file-format
 > spec. PTDE's `dvdbnd` archives aren't encrypted (unlike DS2/DS3), so there are
@@ -87,6 +88,13 @@ installer exe rather than the working directory.
 
 ## Credits
 
-Format knowledge derived from the work of HotPocketRemix (UDSFM), TKGP/JKAnderson
-(SoulsFormats, UXM, Yabber), and the wider Dark Souls modding community. No code
-from those projects is copied here.
+Enormous thanks to **HotPocketRemix** (UDSFM) and **TKGP/JKAnderson**
+(SoulsFormats, UXM, Yabber), whose reverse-engineering of the Dark Souls file
+formats this entire installer is built on — and to the wider Dark Souls modding
+community that documented these formats over the years. None of this would exist
+without their work.
+
+This is an independent clean-room reimplementation written from the format spec;
+no code from those projects is included here. That's a licensing boundary, not a
+statement about their work — go use UDSFM, SoulsFormats, UXM, and Yabber. They're
+excellent.
