@@ -178,7 +178,6 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
     auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
 
     fs::path data(dataDir);
-    fs::path gameRoot = data.parent_path();
     if (!fs::exists(data / "DARKSOULS.exe")) {
         message = "no DARKSOULS.exe in " + dataDir;
         return InstallResult::Failed;
@@ -197,7 +196,9 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
 
         std::string err;
 
-        // 2. Mod payload -> extracted over the game root (its DATA/ merges in).
+        // 2. Mod payload -> extracted into DATA. The zip is DATA-relative
+        //    (loose chr/, map/, ... plus DSFix's DINPUT8.dll/DSfix.ini/dsfix/),
+        //    so it must land next to DARKSOULS.exe, not the game root.
         step("Downloading the mod...", 0);
         fs::path modZip = data / "_mctde_mod.zip";
         if (!downloadUrl(kModUrl, modZip.string(), err, dlProgress(progress, "Downloading the mod..."))) {
@@ -205,7 +206,7 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
             return InstallResult::Failed;
         }
         step("Installing the mod...", -1);
-        extractZip(modZip.string(), gameRoot.string(), err);
+        extractZip(modZip.string(), dataDir, err);
         std::error_code ec; fs::remove(modZip, ec);
 
         // 3. mctde-Link -> DATA.
