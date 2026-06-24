@@ -98,6 +98,15 @@ static void postStatus(int pct, const std::wstring& s) {
 // Must be called on the UI thread (it talks to the edit control directly).
 static void logAppend(const std::wstring& line) {
     if (!g_log) return;
+    // Keep the control bounded: a full unpack streams thousands of lines, so
+    // drop the oldest once it grows large (keeps scrolling snappy).
+    if (SendMessageW(g_log, EM_GETLINECOUNT, 0, 0) > 800) {
+        LRESULT cut = SendMessageW(g_log, EM_LINEINDEX, 400, 0);  // first char of line 400
+        if (cut > 0) {
+            SendMessageW(g_log, EM_SETSEL, 0, (LPARAM)cut);
+            SendMessageW(g_log, EM_REPLACESEL, FALSE, (LPARAM)L"");
+        }
+    }
     int len = GetWindowTextLengthW(g_log);
     SendMessageW(g_log, EM_SETSEL, (WPARAM)len, (LPARAM)len);
     std::wstring s = line + L"\r\n";

@@ -5,6 +5,7 @@
 #include "Extract.h"
 #include "Unpacker.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -38,7 +39,8 @@ static bool backupDataFolder(const fs::path& data, const fs::path& dst, std::str
 
 InstallResult installFlow(const std::string& dataDir,
                           const std::string& namelistPath,
-                          std::string& message) {
+                          std::string& message,
+                          const InstallProgress& progress) {
     fs::path data(dataDir);
     fs::path exe = data / "DARKSOULS.exe";
     if (!fs::exists(exe)) {
@@ -55,7 +57,21 @@ InstallResult installFlow(const std::string& dataDir,
     try {
         // 1. Unpack dvdbnd -> loose files (in place) + nested archives.
         //    (Backups, if any, are made by the caller before we get here.)
-        UnpackStats st = unpackAll(dataDir, dataDir, namelistPath);
+        //    Report each file to the log, but throttle to a readable rate so a
+        //    fast disk doesn't flood the UI with thousands of messages.
+        auto last = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        UnpackProgress onFile = [&](const std::string& rel, size_t) {
+            if (!progress) return;
+            auto now = std::chrono::steady_clock::now();
+            if (now - last < std::chrono::milliseconds(10)) return;
+            last = now;
+            progress("  " + rel, -1);
+        };
+        UnpackStats st = unpackAll(dataDir, dataDir, namelistPath, onFile);
+        if (progress)
+            progress("Unpacked " + std::to_string(st.files) + " files (" +
+                     std::to_string(st.decompressed) + " decompressed, " +
+                     std::to_string(st.errors) + " errors).", -1);
 
         // 2. Patch the exe (to a temp file, then swap over the original).
         std::string pm;
@@ -127,7 +143,7 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         if (packed) {
             step("Unpacking the game (this takes a minute)...", -1);
             std::string um;
-            if (installFlow(dataDir, namelistPath, um) == InstallResult::Failed) {
+            if (installFlow(dataDir, namelistPath, um, progress) == InstallResult::Failed) {
                 message = "unpack failed: " + um;
                 return InstallResult::Failed;
             }

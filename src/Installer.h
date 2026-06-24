@@ -37,9 +37,11 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
 //   3. delete the dvdbnd archives
 //   4. drop a sentinel so re-runs are no-ops
 // Backups are the caller's responsibility (see fullInstall). `namelistPath`
-// points at dvdbnd_namelist.txt. `message` gets a summary.
+// points at dvdbnd_namelist.txt. `message` gets a summary. `progress`, if set,
+// receives a line per file as it's unpacked (throttled internally).
 InstallResult installFlow(const std::string& dataDir,
                           const std::string& namelistPath,
-                          std::string& message);
+                          std::string& message,
+                          const InstallProgress& progress = {});
 
 } // namespace mctde

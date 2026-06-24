@@ -74,7 +74,7 @@ static std::string stripDcxSuffix(std::string s) {
 // flat into map/tx); otherwise the entry's internal subpath is preserved.
 static void unpackSplitArchive(const fs::path& bhdPath, const fs::path& bdtPath,
                                const fs::path& targetBase, bool flatten,
-                               UnpackStats& st) {
+                               UnpackStats& st, const UnpackProgress& progress) {
     Bnd3 b = parseBnd3(readWhole(bhdPath.string()));
     std::ifstream bdt(bdtPath, std::ios::binary);
     if (!bdt) throw std::runtime_error("cannot open " + bdtPath.string());
@@ -98,6 +98,7 @@ static void unpackSplitArchive(const fs::path& bhdPath, const fs::path& bdtPath,
         }
         writeFile(targetBase / fs::path(name), data);
         ++st.files;
+        if (progress) progress(name, st.files);
     }
 }
 
@@ -109,7 +110,8 @@ static std::string leafName(const std::string& name) {
 // chr textures: the BHF3 header lives *inside* the loose chrbnd as a
 // ".chrtpfbhd" entry; the data is the external chrtpfbdt. Unpack to chr/cXXXX/,
 // keep the chrbnd, consume the chrtpfbdt.
-static void unpackChrTextures(const fs::path& root, UnpackStats& st) {
+static void unpackChrTextures(const fs::path& root, UnpackStats& st,
+                              const UnpackProgress& progress) {
     std::vector<fs::path> bdts;
     fs::path chrDir = root / "chr";
     if (!fs::exists(chrDir)) return;
@@ -166,8 +168,10 @@ static void unpackChrTextures(const fs::path& root, UnpackStats& st) {
                 try { data = dcxDecompress(data); ++st.decompressed; }
                 catch (const std::exception&) { ++st.errors; }
             }
-            writeFile(targetDir / fs::path(leafName(stripDcxSuffix(e.name))), data);
+            std::string leaf = leafName(stripDcxSuffix(e.name));
+            writeFile(targetDir / fs::path(leaf), data);
             ++st.files;
+            if (progress) progress("chr/" + stem + "/" + leaf, st.files);
         }
         bdt.close();
         fs::remove(bdtPath);  // consume the data; keep the chrbnd
@@ -178,7 +182,8 @@ static void unpackChrTextures(const fs::path& root, UnpackStats& st) {
     }
 }
 
-void unpackNested(const std::string& outDir, UnpackStats& st) {
+void unpackNested(const std::string& outDir, UnpackStats& st,
+                  const UnpackProgress& progress) {
     fs::path root(outDir);
     std::vector<fs::path> tpfbhd, hkxbhd;
     for (const auto& de : fs::recursive_directory_iterator(root)) {
@@ -195,7 +200,7 @@ void unpackNested(const std::string& outDir, UnpackStats& st) {
         fs::path bdt = bhd; bdt.replace_extension(".tpfbdt");
         if (!fs::exists(bdt)) { ++st.errors; continue; }
         try {
-            unpackSplitArchive(bhd, bdt, txDir, /*flatten=*/true, st);
+            unpackSplitArchive(bhd, bdt, txDir, /*flatten=*/true, st, progress);
             fs::remove(bhd); fs::remove(bdt);
         } catch (const std::exception& e) {
             ++st.errors;
@@ -209,7 +214,7 @@ void unpackNested(const std::string& outDir, UnpackStats& st) {
         fs::path bdt = bhd; bdt.replace_extension(".hkxbdt");
         if (!fs::exists(bdt)) { ++st.errors; continue; }
         try {
-            unpackSplitArchive(bhd, bdt, mapDir, /*flatten=*/false, st);
+            unpackSplitArchive(bhd, bdt, mapDir, /*flatten=*/false, st, progress);
             fs::remove(bhd); fs::remove(bdt);
         } catch (const std::exception& e) {
             ++st.errors;
@@ -217,12 +222,13 @@ void unpackNested(const std::string& outDir, UnpackStats& st) {
         }
     }
 
-    unpackChrTextures(root, st);
+    unpackChrTextures(root, st, progress);
 }
 
 UnpackStats unpackAll(const std::string& dataDir,
                       const std::string& outDir,
-                      const std::string& namelistFile) {
+                      const std::string& namelistFile,
+                      const UnpackProgress& progress) {
     NameMap names;
     if (namelistFile.empty()) names.loadEmbedded();
     else names.load(namelistFile);
@@ -261,11 +267,12 @@ UnpackStats unpackAll(const std::string& dataDir,
 
             writeFile(fs::path(outDir) / rel, data);
             ++st.files;
+            if (progress) progress(rel.string(), st.files);
         }
     }
 
     // Second level: unpack the inner split archives the dvdbnd just produced.
-    unpackNested(outDir, st);
+    unpackNested(outDir, st, progress);
     return st;
 }
 
