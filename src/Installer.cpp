@@ -60,18 +60,18 @@ InstallResult installFlow(const std::string& dataDir,
         //    Report each file to the log, but throttle to a readable rate so a
         //    fast disk doesn't flood the UI with thousands of messages.
         auto last = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-        UnpackProgress onFile = [&](const std::string& rel, size_t) {
+        UnpackProgress onFile = [&](const std::string& rel, int pct) {
             if (!progress) return;
             auto now = std::chrono::steady_clock::now();
             if (now - last < std::chrono::milliseconds(10)) return;
             last = now;
-            progress("  " + rel, -1);
+            progress("  " + rel, pct);
         };
         UnpackStats st = unpackAll(dataDir, dataDir, namelistPath, onFile);
         if (progress)
             progress("Unpacked " + std::to_string(st.files) + " files (" +
                      std::to_string(st.decompressed) + " decompressed, " +
-                     std::to_string(st.errors) + " errors).", -1);
+                     std::to_string(st.errors) + " errors).", 100);
 
         // 2. Patch the exe (to a temp file, then swap over the original).
         std::string pm;

@@ -74,7 +74,7 @@ static std::string stripDcxSuffix(std::string s) {
 // flat into map/tx); otherwise the entry's internal subpath is preserved.
 static void unpackSplitArchive(const fs::path& bhdPath, const fs::path& bdtPath,
                                const fs::path& targetBase, bool flatten,
-                               UnpackStats& st, const UnpackProgress& progress) {
+                               UnpackStats& st, const UnpackProgress& progress, int basePct) {
     Bnd3 b = parseBnd3(readWhole(bhdPath.string()));
     std::ifstream bdt(bdtPath, std::ios::binary);
     if (!bdt) throw std::runtime_error("cannot open " + bdtPath.string());
@@ -98,7 +98,7 @@ static void unpackSplitArchive(const fs::path& bhdPath, const fs::path& bdtPath,
         }
         writeFile(targetBase / fs::path(name), data);
         ++st.files;
-        if (progress) progress(name, st.files);
+        if (progress) progress(name, basePct);
     }
 }
 
@@ -110,8 +110,10 @@ static std::string leafName(const std::string& name) {
 // chr textures: the BHF3 header lives *inside* the loose chrbnd as a
 // ".chrtpfbhd" entry; the data is the external chrtpfbdt. Unpack to chr/cXXXX/,
 // keep the chrbnd, consume the chrtpfbdt.
+// baseDone/A position the chr archives within the nested progress range
+// (75-100%): chr archive j reports pct = 75 + (baseDone + j) * 25 / A.
 static void unpackChrTextures(const fs::path& root, UnpackStats& st,
-                              const UnpackProgress& progress) {
+                              const UnpackProgress& progress, size_t baseDone, size_t A) {
     std::vector<fs::path> bdts;
     fs::path chrDir = root / "chr";
     if (!fs::exists(chrDir)) return;
@@ -120,7 +122,9 @@ static void unpackChrTextures(const fs::path& root, UnpackStats& st,
             bdts.push_back(de.path());
     }
 
-    for (const fs::path& bdtPath : bdts) {
+    for (size_t j = 0; j < bdts.size(); ++j) {
+      const fs::path& bdtPath = bdts[j];
+      int basePct = A ? 75 + (int)((baseDone + j) * 25 / A) : 99;
       try {
         fs::path chrbnd = bdtPath; chrbnd.replace_extension(".chrbnd");
         if (!fs::exists(chrbnd)) { ++st.errors; continue; }
@@ -171,7 +175,7 @@ static void unpackChrTextures(const fs::path& root, UnpackStats& st,
             std::string leaf = leafName(stripDcxSuffix(e.name));
             writeFile(targetDir / fs::path(leaf), data);
             ++st.files;
-            if (progress) progress("chr/" + stem + "/" + leaf, st.files);
+            if (progress) progress("chr/" + stem + "/" + leaf, basePct);
         }
         bdt.close();
         fs::remove(bdtPath);  // consume the data; keep the chrbnd
@@ -192,37 +196,49 @@ void unpackNested(const std::string& outDir, UnpackStats& st,
         if (ext == ".tpfbhd") tpfbhd.push_back(de.path());
         else if (ext == ".hkxbhd") hkxbhd.push_back(de.path());
     }
+    // Count chr texture archives too, so the nested progress range (75-100%) is
+    // spread across every second-level archive.
+    size_t chrCount = 0;
+    fs::path chrDir = root / "chr";
+    if (fs::exists(chrDir))
+        for (const auto& de : fs::recursive_directory_iterator(chrDir))
+            if (de.is_regular_file() && de.path().extension() == ".chrtpfbdt") ++chrCount;
+
+    size_t A = tpfbhd.size() + hkxbhd.size() + chrCount, done = 0;
+    auto basePct = [&]() -> int { return A ? 75 + (int)(done * 25 / A) : 99; };
 
     // Map textures collapse into a single map/tx pool (per the tpfbnd:->map:/tx
     // engine remap); collision archives unpack alongside themselves.
     fs::path txDir = root / "map" / "tx";
     for (const fs::path& bhd : tpfbhd) {
         fs::path bdt = bhd; bdt.replace_extension(".tpfbdt");
-        if (!fs::exists(bdt)) { ++st.errors; continue; }
+        if (!fs::exists(bdt)) { ++st.errors; ++done; continue; }
         try {
-            unpackSplitArchive(bhd, bdt, txDir, /*flatten=*/true, st, progress);
+            unpackSplitArchive(bhd, bdt, txDir, /*flatten=*/true, st, progress, basePct());
             fs::remove(bhd); fs::remove(bdt);
         } catch (const std::exception& e) {
             ++st.errors;
             std::fprintf(stderr, "  [tpf] %s: %s\n", bhd.string().c_str(), e.what());
         }
+        ++done;
     }
     // hkx entry names already carry their map-relative subpath (e.g.
     // m10_00_00_00/h0000B0A10.hkx), so write them under map/ unflattened.
     fs::path mapDir = root / "map";
     for (const fs::path& bhd : hkxbhd) {
         fs::path bdt = bhd; bdt.replace_extension(".hkxbdt");
-        if (!fs::exists(bdt)) { ++st.errors; continue; }
+        if (!fs::exists(bdt)) { ++st.errors; ++done; continue; }
         try {
-            unpackSplitArchive(bhd, bdt, mapDir, /*flatten=*/false, st, progress);
+            unpackSplitArchive(bhd, bdt, mapDir, /*flatten=*/false, st, progress, basePct());
             fs::remove(bhd); fs::remove(bdt);
         } catch (const std::exception& e) {
             ++st.errors;
             std::fprintf(stderr, "  [hkx] %s: %s\n", bhd.string().c_str(), e.what());
         }
+        ++done;
     }
 
-    unpackChrTextures(root, st, progress);
+    unpackChrTextures(root, st, progress, done, A);
 }
 
 UnpackStats unpackAll(const std::string& dataDir,
@@ -233,19 +249,27 @@ UnpackStats unpackAll(const std::string& dataDir,
     if (namelistFile.empty()) names.loadEmbedded();
     else names.load(namelistFile);
 
-    UnpackStats st;
-    std::vector<uint8_t> data;
+    // Parse all four headers first so we know the total record count (D) up
+    // front — that lets the dvdbnd pass report a real 0-75% percentage.
+    struct Src { Bhd5 bhd; std::string bdt; };
+    std::vector<Src> srcs;
+    size_t D = 0;
     for (int i = 0; i < 4; ++i) {
         std::string base = dataDir + "/dvdbnd" + std::to_string(i);
         std::string bhdPath = base + ".bhd5";
         std::string bdtPath = base + ".bdt";
         if (!fs::exists(bhdPath) || !fs::exists(bdtPath)) continue;
+        srcs.push_back({ parseBhd5(readWhole(bhdPath)), bdtPath });
+        D += srcs.back().bhd.records.size();
+    }
 
-        Bhd5 bhd = parseBhd5(readWhole(bhdPath));
-        std::ifstream bdt(bdtPath, std::ios::binary);
-        if (!bdt) throw std::runtime_error("cannot open " + bdtPath);
+    UnpackStats st;
+    std::vector<uint8_t> data;
+    for (const Src& src : srcs) {
+        std::ifstream bdt(src.bdt, std::ios::binary);
+        if (!bdt) throw std::runtime_error("cannot open " + src.bdt);
 
-        for (const Bhd5Record& r : bhd.records) {
+        for (const Bhd5Record& r : src.bhd.records) {
             if (!readRecord(bdt, r, data)) { ++st.errors; continue; }
 
             fs::path rel;
@@ -267,7 +291,7 @@ UnpackStats unpackAll(const std::string& dataDir,
 
             writeFile(fs::path(outDir) / rel, data);
             ++st.files;
-            if (progress) progress(rel.string(), st.files);
+            if (progress) progress(rel.string(), D ? (int)(st.files * 75 / D) : -1);
         }
     }
 
