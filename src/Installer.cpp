@@ -16,7 +16,7 @@ namespace mctde {
 // Download endpoints. The mod payload is host-agnostic (one constant); Link and
 // launcher track the latest GitHub release.
 static const char* kModUrl =
-    "https://pub-7f583dbe74f94799be8d82e955438332.r2.dev/0.88.zip";
+    "https://pub-a585848bebaf4be2a03b1c1051f1ba79.r2.dev/mctde-0.88.zip";
 static const char* kLinkUrl =
     "https://github.com/McRoodyPoo/mctde-Link/releases/latest/download/mctde-Link.zip";
 static const char* kLauncherUrl =
