@@ -231,4 +231,96 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
     }
 }
 
+InstallResult restoreFromBackup(const std::string& backupDir,
+                                const std::string& dataDir,
+                                std::string& message,
+                                const InstallProgress& progress) {
+    fs::path backup(backupDir), data(dataDir);
+    std::error_code ec;
+
+    if (!fs::exists(backup / "DARKSOULS.exe", ec)) {
+        message = "that backup has no DARKSOULS.exe: " + backupDir;
+        return InstallResult::Failed;
+    }
+    if (fs::weakly_canonical(backup, ec) == fs::weakly_canonical(data, ec)) {
+        message = "backup and DATA are the same folder";
+        return InstallResult::Failed;
+    }
+
+    auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
+
+    try {
+        fs::path parent = data.parent_path();
+
+        // 1. Move the live DATA aside with a fast same-volume rename. It is only
+        //    deleted once the copy below fully succeeds, so a mid-copy failure
+        //    can be rolled back to the original.
+        fs::path aside;
+        bool haveData = fs::exists(data, ec);
+        if (haveData) {
+            aside = uniqueBackupPath(parent / "DATA (replaced by restore)");
+            fs::rename(data, aside, ec);
+            if (ec) {
+                message = "could not move the current DATA aside (game still running?): " + ec.message();
+                return InstallResult::Failed;
+            }
+        }
+
+        // 2. Copy the backup into place as the new DATA. Count first for a real
+        //    percentage.
+        step("Reading " + backup.filename().string() + "...", -1);
+        size_t total = 0;
+        for (fs::recursive_directory_iterator it(backup, fs::directory_options::skip_permission_denied, ec), end;
+             it != end; it.increment(ec)) {
+            if (ec) { ec.clear(); continue; }
+            std::error_code fc;
+            if (it->is_regular_file(fc)) ++total;
+        }
+
+        fs::create_directories(data, ec);
+        size_t done = 0;
+        auto lastTick = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        std::string failMsg;
+        for (fs::recursive_directory_iterator it(backup, fs::directory_options::skip_permission_denied, ec), end;
+             it != end; it.increment(ec)) {
+            if (ec) { ec.clear(); continue; }
+            const fs::path& src = it->path();
+            fs::path rel = fs::relative(src, backup, ec);
+            fs::path dst = data / rel;
+            std::error_code ce;
+            if (it->is_directory(ce)) {
+                fs::create_directories(dst, ce);
+            } else if (it->is_regular_file(ce)) {
+                fs::create_directories(dst.parent_path(), ce);
+                fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ce);
+                if (ce) { failMsg = "copy failed for " + rel.string() + ": " + ce.message(); break; }
+                ++done;
+                auto now = std::chrono::steady_clock::now();
+                if (progress && now - lastTick >= std::chrono::milliseconds(50)) {
+                    lastTick = now;
+                    step("  " + rel.string(), total ? (int)(done * 100 / total) : -1);
+                }
+            }
+        }
+
+        if (!failMsg.empty()) {
+            // Roll back: discard the partial copy and put the original DATA back.
+            fs::remove_all(data, ec);
+            if (haveData) fs::rename(aside, data, ec);
+            message = failMsg;
+            return InstallResult::Failed;
+        }
+
+        // 3. Success — drop the now-stale pre-restore copy.
+        if (haveData) fs::remove_all(aside, ec);
+
+        step("Restore complete.", 100);
+        message = "Restored " + std::to_string(done) + " files from " + backup.filename().string() + ".";
+        return InstallResult::Done;
+    } catch (const std::exception& e) {
+        message = std::string("restore failed: ") + e.what();
+        return InstallResult::Failed;
+    }
+}
+
 } // namespace mctde

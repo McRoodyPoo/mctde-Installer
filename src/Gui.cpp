@@ -37,6 +37,7 @@ using namespace mctde;
 #define IDC_BROWSE    1003
 #define IDC_LOG       1004
 #define IDC_REFRESH   1005
+#define IDC_RESTORE   1006
 #define WM_PROGRESS   (WM_APP + 1)   // wParam = pct (-1 indeterminate), lParam = new wchar_t[] status
 #define WM_DONE       (WM_APP + 2)   // wParam = success?1:0, lParam = new wchar_t[] message
 #define WM_FOUND      (WM_APP + 3)   // lParam = new GameInstall*
@@ -44,6 +45,7 @@ using namespace mctde;
 #define WM_UPDATE_AVAIL (WM_APP + 5) // lParam = new wchar_t[] latest version
 #define WM_UPDATE_NONE  (WM_APP + 6) // no update (or check failed) -> just scan
 #define WM_UPDATE_DONE  (WM_APP + 7) // wParam = ok?1:0, lParam = new wchar_t[] message
+#define WM_RESTOREDONE  (WM_APP + 8) // wParam = ok?1:0, lParam = new wchar_t[] message
 
 // ---- palette ----
 static const COLORREF CLR_BG     = RGB(24, 24, 28);
@@ -68,15 +70,18 @@ static HBITMAP   g_banner = nullptr;
 static HFONT     g_font = nullptr, g_fontLog = nullptr;
 static HWND      g_hwnd = nullptr, g_list = nullptr, g_log = nullptr;
 static HWND      g_btnInstall = nullptr, g_btnCancel = nullptr, g_btnBrowse = nullptr, g_btnRefresh = nullptr;
+static HWND      g_btnRestore = nullptr;
 static HBRUSH    g_listBrush = nullptr;   // dark fill for the listbox / log
 static int       g_pct = -1;
 static std::wstring g_lastLog;            // last line appended (dedup repeated progress msgs)
 static volatile bool g_installing = false;
+static volatile bool g_restoring = false;  // restore-from-backup in progress
 static volatile bool g_scanning = false;
 static volatile bool g_updating = false;   // self-update download in progress
 static bool      g_done = false;
 static std::vector<GameInstall> g_installs;
 static std::string g_selDir;   // the install the worker is operating on
+static std::string g_restoreBackup;   // the backup the restore worker copies from
 static bool g_backupPacked = false;
 static bool g_backupUnpacked = false;
 
@@ -167,6 +172,16 @@ static DWORD WINAPI InstallThread(LPVOID) {
     return 0;
 }
 
+static DWORD WINAPI RestoreThread(LPVOID) {
+    std::string msg;
+    InstallResult r = restoreFromBackup(g_restoreBackup, g_selDir, msg,
+        [](const std::string& stage, int pct) { postStatus(pct, widen(stage)); });
+    PostMessageW(g_hwnd, WM_RESTOREDONE, (WPARAM)(r == InstallResult::Failed ? 0 : 1), (LPARAM)dupw(widen(msg)));
+    g_restoring = false;
+    g_installing = false;
+    return 0;
+}
+
 static std::string browseForData(HWND owner) {
     BROWSEINFOW bi = {0};
     bi.hwndOwner = owner;
@@ -237,6 +252,58 @@ static BackupChoice showBackupChoice(HWND owner, bool packed, bool& outPacked, b
     return BackupChoice::BackUp;
 }
 
+// Pick which backup to restore. Returns the chosen backup's full path, or ""
+// on cancel / when there are no backups.
+static std::string showRestoreChoice(HWND owner, const std::vector<BackupInfo>& backups) {
+    if (backups.empty()) {
+        MessageBoxW(owner,
+            L"No backups were found next to this DATA folder.\n\n"
+            L"Backups are created during install (DATA-Backup-Packed / DATA-Backup-Unpacked).",
+            L"mctde Installer", MB_OK | MB_ICONINFORMATION);
+        return "";
+    }
+
+    // Radio labels must outlive the TaskDialog call, so keep them in a vector.
+    std::vector<std::wstring> labels;
+    labels.reserve(backups.size());
+    for (const auto& b : backups) {
+        const wchar_t* st = b.state == GameState::Packed
+            ? L"packed - original archives, full vanilla restore"
+            : b.state == GameState::Unpacked ? L"unpacked - loose files"
+            : L"unknown";
+        labels.push_back(widen(b.name) + L"   (" + st + L")");
+    }
+    std::vector<TASKDIALOG_BUTTON> radios(backups.size());
+    for (size_t i = 0; i < backups.size(); ++i)
+        radios[i] = TASKDIALOG_BUTTON{ (int)(400 + i), labels[i].c_str() };
+
+    TASKDIALOGCONFIG tc = {0};
+    tc.cbSize = sizeof(tc);
+    tc.hwndParent = owner;
+    tc.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_USE_COMMAND_LINKS;
+    tc.pszWindowTitle = L"mctde Installer";
+    tc.pszMainIcon = TD_WARNING_ICON;
+    tc.pszMainInstruction = L"Restore a backup over this install?";
+    tc.pszContent =
+        L"This replaces the current DATA folder with the selected backup. "
+        L"Your current files (including the mod) are discarded. The backup itself is kept.";
+    tc.pRadioButtons = radios.data();
+    tc.cRadioButtons = (UINT)radios.size();
+    tc.nDefaultRadioButton = 400;
+    TASKDIALOG_BUTTON ok[1] = { {410, L"Restore\nReplace DATA with the selected backup"} };
+    tc.pButtons = ok;
+    tc.cButtons = 1;
+    tc.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    tc.nDefaultButton = 410;
+
+    int pressed = 0, radio = 400;
+    if (FAILED(TaskDialogIndirect(&tc, &pressed, &radio, nullptr))) return "";
+    if (pressed != 410) return "";
+    size_t idx = (size_t)(radio - 400);
+    if (idx >= backups.size()) return "";
+    return backups[idx].path;
+}
+
 static void addInstall(const GameInstall& gi) {
     for (const auto& e : g_installs) if (e.dataDir == gi.dataDir) return;  // dedup
     g_installs.push_back(gi);
@@ -244,6 +311,7 @@ static void addInstall(const GameInstall& gi) {
     if (g_installs.size() == 1) {            // auto-select the first
         SendMessageW(g_list, LB_SETCURSEL, 0, 0);
         EnableWindow(g_btnInstall, TRUE);
+        EnableWindow(g_btnRestore, TRUE);
     }
 }
 
@@ -254,6 +322,7 @@ static void startScan() {
     g_installs.clear();
     SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
     EnableWindow(g_btnInstall, FALSE);
+    EnableWindow(g_btnRestore, FALSE);
     EnableWindow(g_btnRefresh, FALSE);
     EnableWindow(g_btnBrowse, TRUE);   // browsing is available during/after a scan
     g_scanning = true;
@@ -270,12 +339,30 @@ static void startInstall() {
     g_done = false;
     g_pct = -1;
     EnableWindow(g_btnInstall, FALSE);
+    EnableWindow(g_btnRestore, FALSE);
     EnableWindow(g_btnCancel, FALSE);
     EnableWindow(g_btnBrowse, FALSE);
     EnableWindow(g_btnRefresh, FALSE);
     EnableWindow(g_list, FALSE);
     SetWindowTextW(g_btnInstall, L"Installing...");
     if (HANDLE t = CreateThread(nullptr, 0, InstallThread, nullptr, 0, nullptr)) CloseHandle(t);
+}
+
+// Confirm a backup choice for the selected install and kick off the restore
+// worker. g_selDir must already point at the target DATA folder.
+static void startRestore() {
+    g_restoring = true;
+    g_installing = true;   // reuse the same "busy" guard the rest of the UI checks
+    g_done = false;
+    g_pct = -1;
+    EnableWindow(g_btnInstall, FALSE);
+    EnableWindow(g_btnRestore, FALSE);
+    EnableWindow(g_btnCancel, FALSE);
+    EnableWindow(g_btnBrowse, FALSE);
+    EnableWindow(g_btnRefresh, FALSE);
+    EnableWindow(g_list, FALSE);
+    SetWindowTextW(g_btnRestore, L"Restoring...");
+    if (HANDLE t = CreateThread(nullptr, 0, RestoreThread, nullptr, 0, nullptr)) CloseHandle(t);
 }
 
 // The exe a shortcut / Play button should launch: the mctde launcher if present,
@@ -517,10 +604,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             24, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_BROWSE, g_inst, nullptr);
         g_btnRefresh = CreateWindowW(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
             130, WIN_H - 50, 100, 34, hWnd, (HMENU)IDC_REFRESH, g_inst, nullptr);
+        g_btnRestore = CreateWindowW(L"BUTTON", L"Restore", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            236, WIN_H - 50, 94, 34, hWnd, (HMENU)IDC_RESTORE, g_inst, nullptr);
         // Browse and Refresh stay disabled until the update check + scan resolve,
         // so a browsed-in path can't be wiped by the scan that follows the check.
         EnableWindow(g_btnBrowse, FALSE);
         EnableWindow(g_btnRefresh, FALSE);
+        EnableWindow(g_btnRestore, FALSE);   // until an install is selected
         g_btnCancel = CreateWindowW(L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
             WIN_W - 224, WIN_H - 50, 90, 34, hWnd, (HMENU)IDC_CANCEL, g_inst, nullptr);
         g_btnInstall = CreateWindowW(L"BUTTON", L"Install", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
@@ -592,6 +682,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_updating = true;
             g_pct = -1;
             EnableWindow(g_btnInstall, FALSE);
+            EnableWindow(g_btnRestore, FALSE);
             EnableWindow(g_btnRefresh, FALSE);
             EnableWindow(g_btnBrowse, FALSE);
             logAppend(L"Downloading the latest installer...");
@@ -650,17 +741,41 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             EnableWindow(g_list, TRUE);
             if (!g_scanning) EnableWindow(g_btnRefresh, TRUE);
         }
+        if (!ok) EnableWindow(g_btnRestore, TRUE);
         SetWindowTextW(g_btnInstall, ok ? L"Play" : L"Install");
         SetWindowTextW(g_btnCancel, ok ? L"Close" : L"Cancel");
         InvalidateRect(hWnd, nullptr, FALSE);
         if (ok) offerShortcuts(hWnd);
         return 0;
     }
+    case WM_RESTOREDONE: {
+        g_restoring = false;
+        g_installing = false;
+        wchar_t* m = (wchar_t*)lParam;
+        bool ok = (wParam == 1);
+        if (m) { logAppend(m); g_lastLog = m; delete[] m; }
+        g_pct = ok ? 100 : -1;
+        SetWindowTextW(g_btnRestore, L"Restore");
+        EnableWindow(g_list, TRUE);
+        EnableWindow(g_btnBrowse, TRUE);
+        EnableWindow(g_btnCancel, TRUE);
+        if (!g_scanning) EnableWindow(g_btnRefresh, TRUE);
+        {   // re-enable the action buttons only while something is selected
+            BOOL has = SendMessageW(g_list, LB_GETCURSEL, 0, 0) != LB_ERR;
+            EnableWindow(g_btnInstall, has);
+            EnableWindow(g_btnRestore, has);
+        }
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return 0;
+    }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_LIST:
-            if (HIWORD(wParam) == LBN_SELCHANGE && !g_installing && !g_done)
-                EnableWindow(g_btnInstall, SendMessageW(g_list, LB_GETCURSEL, 0, 0) != LB_ERR);
+            if (HIWORD(wParam) == LBN_SELCHANGE && !g_installing && !g_done) {
+                BOOL has = SendMessageW(g_list, LB_GETCURSEL, 0, 0) != LB_ERR;
+                EnableWindow(g_btnInstall, has);
+                EnableWindow(g_btnRestore, has);
+            }
             return 0;
         case IDC_INSTALL:
             if (g_done) { launchAndExit(); return 0; }
@@ -675,6 +790,19 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 startInstall();
             }
             return 0;
+        case IDC_RESTORE:
+            if (!g_installing && !g_scanning && !g_updating) {
+                int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
+                if (sel < 0 || sel >= (int)g_installs.size()) return 0;
+                const std::string& dir = g_installs[sel].dataDir;
+                std::string chosen = showRestoreChoice(hWnd, findBackups(dir));
+                if (chosen.empty()) return 0;   // cancelled / none
+                g_selDir = dir;
+                g_restoreBackup = chosen;
+                logAppend(L"Restoring from " + widen(chosen) + L"...");
+                startRestore();
+            }
+            return 0;
         case IDC_BROWSE:
             if (!g_installing) {
                 std::string d = browseForData(hWnd);
@@ -686,6 +814,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                     for (size_t i = 0; i < g_installs.size(); ++i)   // select the browsed one
                         if (g_installs[i].dataDir == d) SendMessageW(g_list, LB_SETCURSEL, i, 0);
                     EnableWindow(g_btnInstall, TRUE);
+                    EnableWindow(g_btnRestore, TRUE);
                     InvalidateRect(hWnd, nullptr, FALSE);
                 }
             }

@@ -171,6 +171,29 @@ int main(int argc, char** argv) {
             return r == InstallResult::Failed ? 2 : 0;
         }
 
+        if (cmd == "backups") {
+            // backups <dataDir> : list restorable backup folders next to DATA
+            if (argc < 3) { std::printf("usage: backups <dataDir>\n"); return 1; }
+            auto bk = findBackups(argv[2]);
+            if (bk.empty()) { std::printf("no backups found next to %s\n", argv[2]); return 0; }
+            for (const auto& b : bk) {
+                const char* st = b.state == GameState::Packed ? "packed"
+                               : b.state == GameState::Unpacked ? "unpacked" : "unknown";
+                std::printf("  [%-8s] %s\n", st, b.path.c_str());
+            }
+            return 0;
+        }
+
+        if (cmd == "restore") {
+            // restore <backupDir> <dataDir> : copy a backup back over DATA
+            if (argc < 4) { std::printf("usage: restore <backupDir> <dataDir>\n"); return 1; }
+            std::string msg;
+            InstallResult r = restoreFromBackup(argv[2], argv[3], msg,
+                [](const std::string& s, int pct) { std::printf("[%4d%%] %s\n", pct, s.c_str()); });
+            std::printf("%s\n", msg.c_str());
+            return r == InstallResult::Failed ? 2 : 0;
+        }
+
         if (cmd == "patchexe") {
             // patchexe <inExe> <outExe>
             if (argc < 4) { std::printf("usage: patchexe <inExe> <outExe>\n"); return 1; }

@@ -46,4 +46,14 @@ InstallResult installFlow(const std::string& dataDir,
                           std::string& message,
                           const InstallProgress& progress = {});
 
+// Restore a backup folder over the live DATA folder. `backupDir` is one of the
+// installer's sibling backups (see findBackups); it must contain DARKSOULS.exe.
+// The current DATA is moved aside first and only deleted once the backup has been
+// copied into place, so a failure mid-copy leaves the original DATA recoverable.
+// The backup itself is left untouched, so it can be restored again later.
+InstallResult restoreFromBackup(const std::string& backupDir,
+                                const std::string& dataDir,
+                                std::string& message,
+                                const InstallProgress& progress = {});
+
 } // namespace mctde

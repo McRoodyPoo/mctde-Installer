@@ -5,6 +5,7 @@
 //
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace mctde {
 
@@ -35,5 +36,18 @@ struct GameInstall {
 // (Steam libraries first, then the bounded scan). Deduplicates by path, so the
 // callback fires once per install. Designed to drive a live-updating UI list.
 void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound);
+
+// A restorable backup folder sitting next to a DATA folder.
+struct BackupInfo {
+    std::string path;   // full path to the backup folder
+    std::string name;   // folder name, e.g. "DATA-Backup-Unpacked (2)"
+    GameState   state;  // packed (original archives) / unpacked (loose files)
+};
+
+// Enumerate the installer's own backup folders that sit beside `dataDir`:
+// siblings named DATA-Backup-Packed / DATA-Backup-Unpacked (and their numbered
+// "(2)", "(3)", ... variants) that actually contain a DARKSOULS.exe, so they can
+// be restored over the live DATA folder. Packed backups are listed first.
+std::vector<BackupInfo> findBackups(const std::string& dataDir);
 
 } // namespace mctde

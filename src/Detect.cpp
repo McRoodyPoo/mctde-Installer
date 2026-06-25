@@ -9,6 +9,7 @@
 #pragma comment(lib, "ole32.lib")
 #include <utility>
 
+#include <algorithm>
 #include <cctype>
 #include <cwctype>
 #include <filesystem>
@@ -263,6 +264,39 @@ GameState detectGameState(const std::string& dataDir) {
                     fs::is_directory(d / "chr", ec) ||
                     fs::is_directory(d / "map", ec);
     return unpacked ? GameState::Unpacked : GameState::Unknown;
+}
+
+std::vector<BackupInfo> findBackups(const std::string& dataDir) {
+    std::vector<BackupInfo> out;
+    std::error_code ec;
+    fs::path data(dataDir);
+    fs::path parent = data.parent_path();
+    if (parent.empty()) return out;
+
+    for (fs::directory_iterator it(parent, fs::directory_options::skip_permission_denied, ec), end;
+         it != end; it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (!it->is_directory(ec)) continue;
+
+        // Folder name must start with "data-backup" (our backups, plus the
+        // numbered "(2)" variants), and it must actually hold a game.
+        std::wstring n = it->path().filename().wstring();
+        for (wchar_t& c : n) c = towlower(c);
+        if (n.rfind(L"data-backup", 0) != 0) continue;
+        if (!fs::exists(it->path() / "DARKSOULS.exe", ec)) continue;
+
+        std::string p = it->path().string();
+        out.push_back(BackupInfo{p, it->path().filename().string(), detectGameState(p)});
+    }
+
+    // Packed backups (the pristine originals) first, then by name so the numbered
+    // variants stay in order.
+    std::sort(out.begin(), out.end(), [](const BackupInfo& a, const BackupInfo& b) {
+        if ((a.state == GameState::Packed) != (b.state == GameState::Packed))
+            return a.state == GameState::Packed;
+        return a.name < b.name;
+    });
+    return out;
 }
 
 } // namespace mctde
