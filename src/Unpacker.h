@@ -16,6 +16,7 @@ struct UnpackStats {
     size_t decompressed = 0;  // DCX entries inflated
     size_t unknown = 0;       // records with no namelist entry
     size_t errors = 0;        // read/inflate failures
+    size_t skippedDup = 0;    // raw records skipped in favor of a .dcx duplicate
 };
 
 // Invoked once per file as it is written, with the file's loose relative path

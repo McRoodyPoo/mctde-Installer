@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -265,15 +266,42 @@ UnpackStats unpackAll(const std::string& dataDir,
 
     UnpackStats st;
     std::vector<uint8_t> data;
+
+    // A few assets ship in the dvdbnd as BOTH a compressed "<name>.dcx" record and
+    // a stale raw "<name>" record. They hash to different names but collapse to the
+    // same loose output once ".dcx" is stripped (e.g. menu/menu.drb). The patched
+    // engine loads the decompressed .dcx form, so when both exist the .dcx must
+    // win — otherwise the raw copy (often an older, smaller build) overwrites it.
+    // That is exactly what truncated menu.drb and stripped the title-screen and
+    // in-game menu entries. Collect every output a .dcx record will produce so the
+    // colliding raw records can be skipped below.
+    auto endsWithDcx = [](const std::string& s) {
+        return s.size() >= 4 && s.compare(s.size() - 4, 4, ".dcx") == 0;
+    };
+    std::unordered_set<std::string> dcxOutputs;
+    for (const Src& src : srcs)
+        for (const Bhd5Record& r : src.bhd.records)
+            if (const std::string* p = names.find(r.nameHash))
+                if (endsWithDcx(*p))
+                    dcxOutputs.insert(outputRel(*p));
+
     for (const Src& src : srcs) {
         std::ifstream bdt(src.bdt, std::ios::binary);
         if (!bdt) throw std::runtime_error("cannot open " + src.bdt);
 
         for (const Bhd5Record& r : src.bhd.records) {
+            const std::string* p = names.find(r.nameHash);
+
+            // Drop a raw record when a .dcx record owns the same output path.
+            if (p && !endsWithDcx(*p) && dcxOutputs.count(outputRel(*p))) {
+                ++st.skippedDup;
+                continue;
+            }
+
             if (!readRecord(bdt, r, data)) { ++st.errors; continue; }
 
             fs::path rel;
-            if (const std::string* p = names.find(r.nameHash)) {
+            if (p) {
                 rel = fs::path(outputRel(*p));
             } else {
                 rel = fs::path("_unknown") / (hexHash(r.nameHash) + ".bin");
