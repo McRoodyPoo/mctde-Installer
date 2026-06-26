@@ -1,5 +1,6 @@
 #include "Installer.h"
 #include "Detect.h"
+#include "DisplayConfig.h"
 #include "Download.h"
 #include "ExePatch.h"
 #include "Extract.h"
@@ -220,6 +221,17 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         {
             std::ofstream sa((data / "steam_appid.txt"), std::ios::binary | std::ios::trunc);
             sa.write("480", 3);
+        }
+
+        // 6. Apply display tweaks in the user's DarkSouls.ini (windowed mode +
+        //    no in-game AA) so DSFix works cleanly. Best-effort: a locked or
+        //    unwritable ini shouldn't fail an otherwise-complete install — log it.
+        {
+            std::string dm;
+            if (ensureDisplayConfig(dm))
+                step("Display: " + dm + ".", -1);
+            else
+                step("Warning: could not apply display settings (" + dm + ").", -1);
         }
 
         step("Done!", 100);
