@@ -118,8 +118,10 @@ int main(int argc, char** argv) {
             findAllDataDirs([&](const GameInstall& gi) {
                 const char* st = gi.state == GameState::Packed ? "packed"
                                : gi.state == GameState::Unpacked ? "unpacked" : "unknown";
-                std::printf("  [%-9s] %-9s %s\n", gi.steam ? "Steam" : "non-Steam", st,
-                            gi.dataDir.c_str());
+                const char* kind = gi.kind == InstallKind::Mctde ? "mctde"
+                                 : gi.kind == InstallKind::Unknown ? "Unknown" : "Ready";
+                std::printf("  [%-9s] %-8s %-9s %s\n", gi.steam ? "Steam" : "non-Steam",
+                            kind, st, gi.dataDir.c_str());
                 ++n;
             });
             std::printf("found %d install(s)\n", n);

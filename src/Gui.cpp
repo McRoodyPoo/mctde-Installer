@@ -11,6 +11,7 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <algorithm>
 #include <cctype>
 #include <string>
 #include <vector>
@@ -59,7 +60,10 @@ static const COLORREF CLR_BARBG  = RGB(46, 46, 54);
 static const COLORREF CLR_FRAME  = RGB(92, 92, 104);
 static const COLORREF CLR_LIST   = RGB(34, 34, 40);
 static const COLORREF CLR_LISTSEL= RGB(62, 62, 78);
-static const COLORREF CLR_STEAM  = RGB(120, 200, 120);   // green-ish "Steam" tag
+static const COLORREF CLR_STEAM  = RGB(120, 200, 120);   // green  "Steam" tag
+static const COLORREF CLR_READY  = RGB(110, 160, 220);   // blue   "Ready" tag
+static const COLORREF CLR_MCTDE  = RGB(230, 150,  70);   // orange "mctde" tag
+static const COLORREF CLR_UNKNOWN= RGB(210,  80,  80);   // red    "Unknown" tag
 
 static const int WIN_W = 560, WIN_H = 560, BANNER_H = 115;
 static const int LOG_TOP = BANNER_H + 188;   // scrolling log spans LOG_TOP .. WIN_H-80
@@ -84,6 +88,11 @@ static std::string g_selDir;   // the install the worker is operating on
 static std::string g_restoreBackup;   // the backup the restore worker copies from
 static bool g_backupPacked = false;
 static bool g_backupUnpacked = false;
+
+// classification helpers (defined lower down, near the list painting)
+static bool isSteamInstallPath(const std::string& dir);
+static void installTag(const GameInstall& gi, const wchar_t*& label, COLORREF& color);
+static int  installRank(const GameInstall& gi);
 
 static std::wstring widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -315,6 +324,38 @@ static void addInstall(const GameInstall& gi) {
     }
 }
 
+// Sort the discovered installs (Steam, then Ready, mctde, Unknown) and rebuild the
+// list, keeping the current selection by path. Called once the scan settles and
+// after a browsed-in folder is added.
+static void sortAndRebuild() {
+    std::string selPath;
+    int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
+    if (sel >= 0 && sel < (int)g_installs.size()) selPath = g_installs[sel].dataDir;
+
+    std::stable_sort(g_installs.begin(), g_installs.end(),
+        [](const GameInstall& a, const GameInstall& b) {
+            int ra = installRank(a), rb = installRank(b);
+            if (ra != rb) return ra < rb;
+            return a.dataDir < b.dataDir;
+        });
+
+    SendMessageW(g_list, LB_RESETCONTENT, 0, 0);
+    int newSel = -1;
+    for (size_t i = 0; i < g_installs.size(); ++i) {
+        SendMessageW(g_list, LB_ADDSTRING, 0, (LPARAM)widen(g_installs[i].dataDir).c_str());
+        if (g_installs[i].dataDir == selPath) newSel = (int)i;
+    }
+    if (newSel < 0 && !g_installs.empty()) newSel = 0;
+    if (newSel >= 0) {
+        SendMessageW(g_list, LB_SETCURSEL, newSel, 0);
+        if (!g_installing && !g_done) {
+            EnableWindow(g_btnInstall, TRUE);
+            EnableWindow(g_btnRestore, TRUE);
+        }
+    }
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+}
+
 // Clear the current results and (re)launch the scan worker. Used on startup and
 // by the Refresh button; ignored while a scan or install is already running.
 static void startScan() {
@@ -498,6 +539,46 @@ static void paintButton(DRAWITEMSTRUCT* di) {
     DrawTextW(di->hDC, txt, -1, &di->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+// True if this is the canonical Steam game folder
+// (…\steamapps\common\Dark Souls Prepare to Die Edition\DATA) — the user's actual
+// Steam install, which is shown green.
+static bool isSteamInstallPath(const std::string& dir) {
+    std::string p = dir;
+    for (char& c : p) { if (c == '/') c = '\\'; c = (char)tolower((unsigned char)c); }
+    static const std::string suffix =
+        "\\steamapps\\common\\dark souls prepare to die edition\\data";
+    return p.size() >= suffix.size() &&
+           p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// The right-side tag (label + color) for an install. The canonical Steam install
+// is green: "Steam" when clean, "mctde" (still green) when it's the modded copy.
+// Other installs show their kind: Ready=blue, mctde=orange, Unknown=red.
+static void installTag(const GameInstall& gi, const wchar_t*& label, COLORREF& color) {
+    bool canon = isSteamInstallPath(gi.dataDir);
+    switch (gi.kind) {
+        case InstallKind::Mctde:
+            label = L"mctde"; color = canon ? CLR_STEAM : CLR_MCTDE; break;
+        case InstallKind::Unknown:
+            label = L"Unknown"; color = CLR_UNKNOWN; break;
+        case InstallKind::Ready:
+        default:
+            label = canon ? L"Steam" : L"Ready";
+            color = canon ? CLR_STEAM : CLR_READY; break;
+    }
+}
+
+// Row sort order: the Steam install first, then Ready, then mctde, then Unknown.
+static int installRank(const GameInstall& gi) {
+    if (isSteamInstallPath(gi.dataDir)) return 0;
+    switch (gi.kind) {
+        case InstallKind::Ready:   return 1;
+        case InstallKind::Mctde:   return 2;
+        case InstallKind::Unknown: return 3;
+    }
+    return 3;
+}
+
 static void paintListItem(DRAWITEMSTRUCT* di) {
     if (di->itemID == (UINT)-1) return;
     const GameInstall& gi = g_installs[di->itemID];
@@ -522,12 +603,15 @@ static void paintListItem(DRAWITEMSTRUCT* di) {
         DrawTextW(di->hDC, stateText, -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         right -= sz.cx + 12;
     }
-    if (gi.steam) {
-        const wchar_t* tag = L"Steam";
+    // Second tag, in the same slot: the install's classification (see installTag).
+    const wchar_t* tag = nullptr;
+    COLORREF tagColor = CLR_DIM;
+    installTag(gi, tag, tagColor);
+    if (tag) {
         SIZE s2{0, 0};
-        GetTextExtentPoint32W(di->hDC, tag, 5, &s2);
+        GetTextExtentPoint32W(di->hDC, tag, (int)wcslen(tag), &s2);
         tr = di->rcItem; tr.left = right - s2.cx; tr.right = right;
-        SetTextColor(di->hDC, CLR_STEAM);
+        SetTextColor(di->hDC, tagColor);
         DrawTextW(di->hDC, tag, -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         right -= s2.cx + 12;
     }
@@ -664,7 +748,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             const wchar_t* tag = gi->steam ? L"Steam" : L"non-Steam";
             const wchar_t* st = gi->state == GameState::Packed ? L"packed"
                               : gi->state == GameState::Unpacked ? L"unpacked" : L"unknown";
-            logAppend(std::wstring(L"Found [") + tag + L", " + st + L"]: " + widen(gi->dataDir));
+            const wchar_t* kind = gi->kind == InstallKind::Mctde ? L"mctde "
+                                : gi->kind == InstallKind::Unknown ? L"Unknown " : L"Ready ";
+            logAppend(std::wstring(L"Found [") + tag + L", " + kind + st + L"]: " + widen(gi->dataDir));
             delete gi;
             InvalidateRect(hWnd, nullptr, FALSE);
         }
@@ -710,6 +796,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_SCANDONE:
         g_scanning = false;
         if (!g_installing && !g_done) EnableWindow(g_btnRefresh, TRUE);
+        sortAndRebuild();   // settle the rows into Steam > Ready > mctde > Unknown order
         logAppend(g_installs.empty()
             ? L"No Dark Souls install found. Click Browse to locate DARKSOULS.exe."
             : L"Found " + std::to_wstring(g_installs.size()) +
@@ -782,6 +869,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 int sel = (int)SendMessageW(g_list, LB_GETCURSEL, 0, 0);
                 if (sel < 0 || sel >= (int)g_installs.size()) return 0;
+                // Refuse to install onto a modified ("Unknown") copy.
+                if (g_installs[sel].kind == InstallKind::Unknown) {
+                    MessageBoxW(hWnd,
+                        L"This copy looks modified!\n\n"
+                        L"Cracked, pre-patch, or heavily modified versions are not "
+                        L"compatible with mctde.\n\n"
+                        L"Please use a clean (vanilla) copy of PTDE.",
+                        L"mctde Installer", MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
                 bool doP = false, doU = false;
                 BackupChoice c = showBackupChoice(hWnd, g_installs[sel].state == GameState::Packed, doP, doU);
                 if (c == BackupChoice::Cancel) return 0;
@@ -809,10 +906,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (!d.empty()) {
                     std::string low = d;
                     for (char& c : low) c = (char)tolower((unsigned char)c);
+                    GameState st = detectGameState(d);
                     addInstall(GameInstall{d, low.find("steamapps") != std::string::npos,
-                                           detectGameState(d)});
+                                           st, classifyInstall(d, st)});
                     for (size_t i = 0; i < g_installs.size(); ++i)   // select the browsed one
                         if (g_installs[i].dataDir == d) SendMessageW(g_list, LB_SETCURSEL, i, 0);
+                    sortAndRebuild();   // keep rows ordered, preserving the new selection
                     EnableWindow(g_btnInstall, TRUE);
                     EnableWindow(g_btnRestore, TRUE);
                     InvalidateRect(hWnd, nullptr, FALSE);

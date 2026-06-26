@@ -11,6 +11,15 @@ namespace mctde {
 
 enum class GameState { Packed, Unpacked, Unknown };
 
+// What an install actually is, beyond packed/unpacked:
+//   Ready   - a clean naked packed/unpacked game (safe to install onto). Backup
+//             copies that are clean fall here too.
+//   Mctde   - mctde is installed (launcher / Link present)
+//   Unknown - modified: a file in param/chr/event/script differs from vanilla
+//             (extra files are fine; changed vanilla files are not). Not safe to
+//             install onto.
+enum class InstallKind { Ready, Mctde, Unknown };
+
 // Find the Dark Souls: Prepare to Die Edition DATA folder by reading Steam's
 // install path + library folders. Returns the DATA dir (containing
 // DARKSOULS.exe) or "" if not found.
@@ -30,7 +39,14 @@ struct GameInstall {
     std::string dataDir;   // folder containing DARKSOULS.exe
     bool steam;            // path lives under a Steam library
     GameState state;       // packed / unpacked / unknown
+    InstallKind kind;      // vanilla / mctde / backup / unknown
 };
+
+// Classify an install folder, given its already-determined packed/unpacked state.
+// Backup is decided by the DATA-Backup-* folder name; mctde by its marker files;
+// Unknown by comparing param/chr/event/script (loose) or the dvdbnd sizes
+// (packed) against the embedded vanilla baseline.
+InstallKind classifyInstall(const std::string& dataDir, GameState state);
 
 // Find ALL PTDE installs, invoking `onFound` for each as it is discovered
 // (Steam libraries first, then the bounded scan). Deduplicates by path, so the

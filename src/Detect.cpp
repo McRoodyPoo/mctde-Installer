@@ -1,4 +1,5 @@
 #include "Detect.h"
+#include "VanillaManifest.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -11,10 +12,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -205,7 +208,15 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
         for (char& c : key) c = char(std::tolower((unsigned char)c));
         if (!seen.insert(key).second) return;  // already reported
         bool steam = key.find("steamapps") != std::string::npos;
-        onFound(GameInstall{dir, steam, detectGameState(dir)});
+        GameState state = detectGameState(dir);
+        onFound(GameInstall{dir, steam, state, classifyInstall(dir, state)});
+    };
+    // Report an install plus any of the installer's own backups sitting beside it,
+    // so DATA-Backup-* folders show up in the list (classified as Backup) instead
+    // of being invisible.
+    auto reportInstall = [&](const std::string& dir) {
+        report(dir);
+        for (const auto& b : findBackups(dir)) report(b.path);
     };
 
     const std::string sub = "\\steamapps\\common\\Dark Souls Prepare to Die Edition\\DATA";
@@ -214,7 +225,7 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
     for (const std::string& lib : libraryPaths(steamRoot())) {
         std::error_code ec;
         std::string data = lib + sub;
-        if (fs::exists(fs::path(data) / "DARKSOULS.exe", ec)) report(data);
+        if (fs::exists(fs::path(data) / "DARKSOULS.exe", ec)) reportInstall(data);
     }
 
     // 2. Fixed Steam-library spots on every drive.
@@ -228,7 +239,7 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
                               "\\SteamLibrary\\steamapps\\common"}) {
             std::error_code ec;
             std::string cand = r + p + sub;
-            if (fs::exists(fs::path(cand) / "DARKSOULS.exe", ec)) report(cand);
+            if (fs::exists(fs::path(cand) / "DARKSOULS.exe", ec)) reportInstall(cand);
         }
     }
 
@@ -247,7 +258,7 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
     }
     for (const auto& r : roots) {
         if (GetTickCount64() > deadline) break;
-        searchRootAll(r.first, r.second, deadline, report);
+        searchRootAll(r.first, r.second, deadline, reportInstall);
     }
 }
 
@@ -297,6 +308,67 @@ std::vector<BackupInfo> findBackups(const std::string& dataDir) {
         return a.name < b.name;
     });
     return out;
+}
+
+// Parse the embedded vanilla manifest once into relpath -> size.
+static const std::unordered_map<std::string, uint64_t>& vanillaSizes() {
+    static const std::unordered_map<std::string, uint64_t> m = [] {
+        std::unordered_map<std::string, uint64_t> r;
+        std::string line;
+        for (const char* c = kVanillaManifest;; ++c) {
+            if (*c == '\n' || *c == '\0') {
+                size_t tab = line.find('\t');
+                if (tab != std::string::npos && tab > 0)
+                    r.emplace(line.substr(0, tab),
+                              std::strtoull(line.c_str() + tab + 1, nullptr, 10));
+                line.clear();
+                if (*c == '\0') break;
+            } else if (*c != '\r') {
+                line.push_back(*c);
+            }
+        }
+        return r;
+    }();
+    return m;
+}
+
+static bool hasMctde(const fs::path& data) {
+    std::error_code ec;
+    return fs::exists(data / "mctde-link.ini", ec) ||
+           fs::exists(data / "mctde_launcher.exe", ec);
+}
+
+// A loose install is modified if any vanilla param/chr/event/script file is
+// present with a different size. Extra files are ignored; a missing vanilla file
+// is not treated as a modification (lenient). Short-circuits on the first hit.
+static bool hasModifiedCoreFiles(const fs::path& data) {
+    std::error_code ec;
+    for (const auto& kv : vanillaSizes()) {
+        uint64_t sz = (uint64_t)fs::file_size(data / kv.first, ec);
+        if (!ec && sz != kv.second) return true;
+    }
+    return false;
+}
+
+// A packed install is modified if any vanilla dvdbnd file is missing or a
+// different size (those four dirs live inside the archives when packed).
+static bool hasModifiedArchives(const fs::path& data) {
+    std::error_code ec;
+    for (size_t i = 0; i < kVanillaArchiveCount; ++i) {
+        uint64_t sz = (uint64_t)fs::file_size(data / kVanillaArchives[i].name, ec);
+        if (ec || sz != kVanillaArchives[i].size) return true;
+    }
+    return false;
+}
+
+InstallKind classifyInstall(const std::string& dataDir, GameState state) {
+    fs::path data(dataDir);
+    if (hasMctde(data)) return InstallKind::Mctde;
+    if (state == GameState::Packed)
+        return hasModifiedArchives(data) ? InstallKind::Unknown : InstallKind::Ready;
+    if (state == GameState::Unpacked)
+        return hasModifiedCoreFiles(data) ? InstallKind::Unknown : InstallKind::Ready;
+    return InstallKind::Unknown;
 }
 
 } // namespace mctde
