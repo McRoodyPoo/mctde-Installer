@@ -1,6 +1,6 @@
-# testdata/ — drop a *packed* PTDE install here for validation
+# testdata/: drop a *packed* PTDE install here for validation
 
-These files are **gitignored** (`*.bhd5`, `*.bdt`, `DARKSOULS.exe`) — they will
+These files are **gitignored** (`*.bhd5`, `*.bdt`, `DARKSOULS.exe`). They will
 never be committed. They're only used locally to validate the unpacker and the
 exe patcher against real data.
 
@@ -20,7 +20,7 @@ Required for the exe patcher:
 
 ## How I'll use it
 
-1. `mctde-installer bhd5 testdata/dvdbnd0.bhd5` — validate BHD5 parsing against real records.
+1. `mctde-installer bhd5 testdata/dvdbnd0.bhd5`: validate BHD5 parsing against real records.
 2. Generate the namelist + extract a few real DCX files to confirm zlib `DFLT` decode.
 3. Diff the unpacker's output against your already-unpacked `RAW PTDE - mctde\DATA`.
 4. SHA-256 + pattern-locate the patch sites in the clean exe.

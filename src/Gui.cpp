@@ -1,4 +1,4 @@
-// Gui.cpp — native Win32 front-end for the mctde installer.
+// Gui.cpp: native Win32 front-end for the mctde installer.
 //
 // Dark window with the Artorias banner. On launch it scans for every Dark Souls
 // PTDE install (Steam libraries first, then a bounded drive scan) and lists them
@@ -540,7 +540,7 @@ static void paintButton(DRAWITEMSTRUCT* di) {
 }
 
 // True if this is the canonical Steam game folder
-// (…\steamapps\common\Dark Souls Prepare to Die Edition\DATA) — the user's actual
+// (…\steamapps\common\Dark Souls Prepare to Die Edition\DATA), the user's actual
 // Steam install, which is shown green.
 static bool isSteamInstallPath(const std::string& dir) {
     std::string p = dir;

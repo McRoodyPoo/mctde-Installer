@@ -138,7 +138,7 @@ bool downloadGoogleDrive(const std::string& fileId, const std::string& outPath,
     }
     if (!html) return status == 200;
 
-    // We got the confirm/quota interstitial — parse it and re-request.
+    // We got the confirm/quota interstitial. Parse it and re-request.
     std::ifstream f(outPath, std::ios::binary);
     std::string page((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     f.close();

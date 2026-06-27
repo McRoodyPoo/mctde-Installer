@@ -59,7 +59,7 @@ InstallResult installFlow(const std::string& dataDir,
     fs::path data(dataDir);
     fs::path exe = data / "DARKSOULS.exe";
     if (!fs::exists(exe)) {
-        message = "no DARKSOULS.exe in " + dataDir + " — not a PTDE DATA folder";
+        message = "no DARKSOULS.exe in " + dataDir + " (not a PTDE DATA folder)";
         return InstallResult::Failed;
     }
 
@@ -225,7 +225,7 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
 
         // 6. Apply display tweaks in the user's DarkSouls.ini (windowed mode +
         //    no in-game AA) so DSFix works cleanly. Best-effort: a locked or
-        //    unwritable ini shouldn't fail an otherwise-complete install — log it.
+        //    unwritable ini shouldn't fail an otherwise-complete install, so log it.
         {
             std::string dm;
             if (ensureDisplayConfig(dm))
@@ -323,7 +323,7 @@ InstallResult restoreFromBackup(const std::string& backupDir,
             return InstallResult::Failed;
         }
 
-        // 3. Success — drop the now-stale pre-restore copy.
+        // 3. Success: drop the now-stale pre-restore copy.
         if (haveData) fs::remove_all(aside, ec);
 
         step("Restore complete.", 100);

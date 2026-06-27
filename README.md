@@ -15,15 +15,15 @@ The unpack/patch core does in C++ what
 (UDSFM) does; the rest is the download-and-deploy flow that lays the whole mctde
 stack down for you.
 
-There's a small GUI for normal use — it scans for Dark Souls installs, you pick
-one and click **Install** — and a CLI that exposes the individual steps.
+There's a small GUI for normal use (it scans for Dark Souls installs, you pick
+one and click **Install**) and a CLI that exposes the individual steps.
 
 ## What a full install does
 
 Run against a PTDE `DATA` folder (GUI, or `fullinstall` on the CLI), the
 installer:
 
-1. **Unpacks + patches the game** — only if it's still packed. `dvdbnd` archives
+1. **Unpacks + patches the game** (only if it's still packed). `dvdbnd` archives
    become loose files, `DARKSOULS.exe` is patched to read them, and the original
    exe + archives are backed up to `mctde-backup/` first. (Details below.)
 2. **Downloads the mctde mod** from the project's Cloudflare R2 bucket and
@@ -56,12 +56,12 @@ The unpack/patch step is three coordinated operations:
 
 ## File formats (PTDE)
 
-- **BHD5** — header table. LE. 24-byte header, then buckets `{u32 count, u32
+- **BHD5**: header table. LE. 24-byte header, then buckets `{u32 count, u32
   offset}`, then 16-byte records `{u32 nameHash, u32 size, u64 offset}`.
-- **BDT** — raw data blob; slice `size` bytes at `offset`.
-- **DCX** — compression container. Big-endian header; DS1 uses `DFLT` = a zlib
+- **BDT**: raw data blob; slice `size` bytes at `offset`.
+- **DCX**: compression container. Big-endian header; DS1 uses `DFLT` = a zlib
   (RFC 1950) payload located via the `DCS` (sizes) and `DCA` (payload) markers.
-- **Name hash** — DS1 path hash: `h = h*37 + c` over the lowercased,
+- **Name hash**: DS1 path hash `h = h*37 + c` over the lowercased,
   forward-slash path. A namelist maps hashes back to real paths.
 
 ## Layout
@@ -105,7 +105,7 @@ Diagnostics: `bhd5`, `bnd3`, `dcx`, `extract`, `extractzip`, `nested`, `detect`,
 **Complete and validated against a real PTDE install + a reference unpack.**
 
 - Two-level unpack (dvdbnd → loose, then inner `tpfbhd`/`hkxbhd`/`chrtpf` →
-  `tpf`/`hkx`) reproduces the reference tree exactly — 13,302/13,302
+  `tpf`/`hkx`) reproduces the reference tree exactly: 13,302/13,302
   dvdbnd-derived files, names and content (SHA-256) verified.
 - The exe patch matches the known UDSFM-patched `DARKSOULS.exe` byte-for-byte.
 - The one header missing from the game files (`c4110.chrtpfbhd`) is reconstructed.
@@ -116,21 +116,21 @@ Diagnostics: `bhd5`, `bnd3`, `dcx`, `extract`, `extractzip`, `nested`, `detect`,
 file formats. It stands on a lot of reverse-engineering work by the Dark Souls
 modding community:
 
-- **[HotPocketRemix](https://github.com/HotPocketRemix)** —
+- **[HotPocketRemix](https://github.com/HotPocketRemix)**:
   [UnpackDarkSoulsForModding](https://github.com/HotPocketRemix/UnpackDarkSoulsForModding),
   the original this follows, and the reconstructed `c4110.chrtpfbhd` header (the
   one texture header missing from the game files).
 - **[Meowmaritus](https://github.com/Meowmaritus)** &
-  **[Wulf2k](https://github.com/Wulf2k)** — reverse-engineered the dvdbnd filename
+  **[Wulf2k](https://github.com/Wulf2k)**: reverse-engineered the dvdbnd filename
   list, embedded here as the namelist.
-- **[TKGP / JKAnderson](https://github.com/JKAnderson)** —
+- **[TKGP / JKAnderson](https://github.com/JKAnderson)**:
   [SoulsFormats](https://github.com/JKAnderson/SoulsFormats), UXM, and Yabber,
   where the BHD5 / DCX / BND3 format details come from.
-- **Burton Radons** — BND3 format reverse-engineering.
-- **[Sean Pesce](https://github.com/SeanPesce)** —
+- **Burton Radons**: BND3 format reverse-engineering.
+- **[Sean Pesce](https://github.com/SeanPesce)**:
   [DsGameFiles](https://github.com/SeanPesce/Dark-Souls-Game-Files-Lib)
   (`FileList.h`), where the namelist was collated.
-- **[Rich Geldreich](https://github.com/richgel999)** —
+- **[Rich Geldreich](https://github.com/richgel999)**:
   [miniz](https://github.com/richgel999/miniz), public domain (Unlicense),
   vendored in `third_party/`.
 

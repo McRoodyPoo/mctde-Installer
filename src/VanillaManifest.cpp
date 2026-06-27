@@ -1,4 +1,4 @@
-// GENERATED — vanilla param/chr/event/script file sizes + dvdbnd sizes.
+// GENERATED: vanilla param/chr/event/script file sizes + dvdbnd sizes.
 // Regenerate from a clean reference unpack if the canonical build changes.
 #include "VanillaManifest.h"
 

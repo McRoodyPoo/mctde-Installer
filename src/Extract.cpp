@@ -78,7 +78,7 @@ ExtractStats extractZip(const std::string& zipPath, const std::string& outDir,
         }
         if (out.has_parent_path()) fs::create_directories(out.parent_path(), ec);
 
-        // Preserve an existing dsfix.ini — never clobber the user's DSFix settings.
+        // Preserve an existing dsfix.ini. Never clobber the user's DSFix settings.
         std::string base = out.filename().string();
         for (char& c : base) c = char(std::tolower((unsigned char)c));
         if (base == "dsfix.ini" && fs::exists(out, ec)) { ++st.files; continue; }

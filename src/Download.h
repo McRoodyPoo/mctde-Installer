@@ -10,7 +10,7 @@
 
 namespace mctde {
 
-// progress(received, total) — return false to cancel. total == 0 if unknown.
+// progress(received, total): return false to cancel. total == 0 if unknown.
 using ProgressFn = std::function<bool(uint64_t received, uint64_t total)>;
 
 // Stream any http(s) URL to outPath (follows redirects). false + err on failure.

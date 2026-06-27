@@ -251,7 +251,7 @@ UnpackStats unpackAll(const std::string& dataDir,
     else names.load(namelistFile);
 
     // Parse all four headers first so we know the total record count (D) up
-    // front — that lets the dvdbnd pass report a real 0-75% percentage.
+    // front, so the dvdbnd pass can report a real 0-75% percentage.
     struct Src { Bhd5 bhd; std::string bdt; };
     std::vector<Src> srcs;
     size_t D = 0;
@@ -271,7 +271,7 @@ UnpackStats unpackAll(const std::string& dataDir,
     // a stale raw "<name>" record. They hash to different names but collapse to the
     // same loose output once ".dcx" is stripped (e.g. menu/menu.drb). The patched
     // engine loads the decompressed .dcx form, so when both exist the .dcx must
-    // win — otherwise the raw copy (often an older, smaller build) overwrites it.
+    // win. Otherwise the raw copy (often an older, smaller build) overwrites it.
     // That is exactly what truncated menu.drb and stripped the title-screen and
     // in-game menu entries. Collect every output a .dcx record will produce so the
     // colliding raw records can be skipped below.

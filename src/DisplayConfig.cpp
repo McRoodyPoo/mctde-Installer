@@ -143,7 +143,7 @@ static bool applyEdit(std::vector<std::string>& lines, const IniEdit& e, std::st
         return true;
     }
 
-    // Section exists but the key is absent — insert right after the header.
+    // Section exists but the key is absent, so insert right after the header.
     lines.insert(lines.begin() + headerIdx + 1, kv + eolOf(lines[headerIdx], "\r\n"));
     note = "added " + kv + " to " + section;
     return true;

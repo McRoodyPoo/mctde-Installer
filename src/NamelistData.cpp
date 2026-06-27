@@ -1,4 +1,4 @@
-// Auto-generated from data/dvdbnd_namelist.txt — the PTDE dvdbnd namelist embedded
+// Auto-generated from data/dvdbnd_namelist.txt: the PTDE dvdbnd namelist embedded
 // so the installer is self-contained (no sibling data/ folder needed).
 #include "NameHash.h"
 namespace mctde {

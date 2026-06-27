@@ -15,7 +15,7 @@ namespace mctde {
 extern const char* const kInstallerVersion;
 
 // Fetch latest.txt and return the advertised installer version ("" on any
-// failure, including no network — callers should treat that as "up to date").
+// failure, including no network; callers should treat that as "up to date").
 std::string fetchLatestInstallerVersion();
 
 // True iff dotted-int 'latest' is strictly higher than 'current'. Unparseable

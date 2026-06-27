@@ -1,7 +1,7 @@
 #pragma once
 //
 // Installer: the end-to-end, idempotent install flow that turns a packed PTDE
-// install into an unpacked, loose-file-loading one — operating in place on the
+// install into an unpacked, loose-file-loading one, operating in place on the
 // given DATA directory, with a backup of the originals first.
 //
 #include <functional>

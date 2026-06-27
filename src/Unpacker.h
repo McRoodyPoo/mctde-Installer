@@ -21,7 +21,7 @@ struct UnpackStats {
 
 // Invoked once per file as it is written, with the file's loose relative path
 // and an overall completion percentage (0-100): dvdbnd records span 0-75%, the
-// nested texture/collision archives span 75-100%. Optional — pass {} to skip.
+// nested texture/collision archives span 75-100%. Optional (pass {} to skip).
 using UnpackProgress = std::function<void(const std::string& relPath, int pct)>;
 
 // Unpack dvdbnd0-3 found in `dataDir` into `outDir`, naming files via the

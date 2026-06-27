@@ -133,7 +133,7 @@ static std::string searchRoot(const fs::path& root, int maxDepth, ULONGLONG dead
 }
 
 std::string findDataDir() {
-    // 1. Steam registry — fast and almost always right.
+    // 1. Steam registry (fast and almost always right).
     std::string d = detectSteamDataDir();
     if (!d.empty()) return d;
 
@@ -221,7 +221,7 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
 
     const std::string sub = "\\steamapps\\common\\Dark Souls Prepare to Die Edition\\DATA";
 
-    // 1. Steam libraries (registry + libraryfolders.vdf) — fast, most likely.
+    // 1. Steam libraries (registry + libraryfolders.vdf): fast, most likely.
     for (const std::string& lib : libraryPaths(steamRoot())) {
         std::error_code ec;
         std::string data = lib + sub;

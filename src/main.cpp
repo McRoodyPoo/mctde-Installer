@@ -1,5 +1,5 @@
 //
-// mctde-installer — a C++ take on UDSFM: PTDE unpacker / installer.
+// mctde-installer: a C++ take on UDSFM, a PTDE unpacker / installer.
 //
 // This early build exposes the core decoders as a probe CLI so they can be
 // validated against real files before the full install flow is wired up.

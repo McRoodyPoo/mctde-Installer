@@ -1,4 +1,4 @@
-# PTDE dvdbnd namelist — virtual paths for Dark Souls: Prepare to Die Edition archive files.
+# PTDE dvdbnd namelist: virtual paths for Dark Souls: Prepare to Die Edition archive files.
 # One path per line; lines not starting with '/' are ignored.
 #
 # Filename data reversed by Meowmaritus and Wulf2k; collated into C++ by Sean Pesce

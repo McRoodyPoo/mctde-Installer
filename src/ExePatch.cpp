@@ -6,7 +6,7 @@
 
 namespace mctde {
 
-// PTDE Steam DARKSOULS.exe — clean and UDSFM-patched SHA-256 (lowercase).
+// PTDE Steam DARKSOULS.exe: clean and UDSFM-patched SHA-256 (lowercase).
 static const char* kCleanSha =
     "67bcab513c8f0ed6164279d85f302e06b1d8a53abff5df7f3d10e1d4dfd81459";
 static const char* kPatchedSha =
