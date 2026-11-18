@@ -7,6 +7,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -92,7 +93,7 @@ std::string fetchLatestInstallerVersion() {
     std::wstring tmp = std::wstring(tmpDir) + L"mctde_latest.txt";
     std::string err;
     if (!downloadUrl(kManifestUrl, narrow(tmp), err)) return "";
-    std::ifstream f(tmp);
+    std::ifstream f{std::filesystem::path(tmp)};
     std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     f.close();
     DeleteFileW(tmp.c_str());
@@ -122,7 +123,7 @@ bool selfUpdate(std::string& err, const ProgressFn& progress) {
     // 2. Sanity-check it's a real PE (guards against an HTML error page slipping
     //    through a redirect, and against a truncated download).
     {
-        std::ifstream f(newP, std::ios::binary | std::ios::ate);
+        std::ifstream f(std::filesystem::path(newP), std::ios::binary | std::ios::ate);
         std::streamoff sz = f ? (std::streamoff)f.tellg() : 0;
         char mz[2] = {0};
         if (f) { f.seekg(0); f.read(mz, 2); }
