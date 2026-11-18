@@ -79,6 +79,15 @@ third_party/
 data/           generated namelist(s)
 ```
 
+## Linux (Wine / Proton)
+
+Run the installer under Wine or Proton. On top of the Windows Steam registry
+lookup, it finds a native Linux Steam (`~/.local/share/Steam`, `~/.steam/steam`,
+Flatpak and Snap) and reads its `libraryfolders.vdf`, turning the Unix library
+paths into the drive Wine maps them to (normally `Z:`). The fallback scan looks
+through your home folder and `/mnt`, `/media` and `/run/media` instead of
+crawling all of `/`.
+
 ## Build
 
 ```

@@ -20,8 +20,16 @@ enum class GameState { Packed, Unpacked, Unknown };
 //             install onto.
 enum class InstallKind { Ready, Mctde, Unknown };
 
+// True when running under Wine / Proton (i.e. on Linux or macOS).
+bool isWine();
+
+// Under Wine, convert a Unix path ("/home/me/x") to the DOS path Wine exposes
+// it as ("Z:\home\me\x"). Non-Unix paths are returned unchanged.
+std::string unixToDosPath(const std::string& unixPath);
+
 // Find the Dark Souls: Prepare to Die Edition DATA folder by reading Steam's
-// install path + library folders. Returns the DATA dir (containing
+// install path + library folders (and, under Wine, the native Linux Steam's
+// library folders). Returns the DATA dir (containing
 // DARKSOULS.exe) or "" if not found.
 std::string detectSteamDataDir();
 
