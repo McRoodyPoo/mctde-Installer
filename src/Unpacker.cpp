@@ -5,6 +5,8 @@
 #include "Dcx.h"
 #include "NameHash.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -197,6 +199,23 @@ void unpackNested(const std::string& outDir, UnpackStats& st,
         if (ext == ".tpfbhd") tpfbhd.push_back(de.path());
         else if (ext == ".hkxbhd") hkxbhd.push_back(de.path());
     }
+    // Process archives in a fixed, Windows-like order (case-insensitive by
+    // path, as NTFS lists them). Map textures from different archives flatten
+    // into one map/tx folder and the last writer wins on a duplicate name, so
+    // the raw directory order (random on Linux filesystems) would change which
+    // texture ends up in place.
+    auto ciLess = [](const fs::path& a, const fs::path& b) {
+        const std::string x = a.generic_string(), y = b.generic_string();
+        size_t n = std::min(x.size(), y.size());
+        for (size_t i = 0; i < n; ++i) {
+            int cx = std::toupper((unsigned char)x[i]), cy = std::toupper((unsigned char)y[i]);
+            if (cx != cy) return cx < cy;
+        }
+        return x.size() < y.size();
+    };
+    std::sort(tpfbhd.begin(), tpfbhd.end(), ciLess);
+    std::sort(hkxbhd.begin(), hkxbhd.end(), ciLess);
+
     // Count chr texture archives too, so the nested progress range (75-100%) is
     // spread across every second-level archive.
     size_t chrCount = 0;
