@@ -133,9 +133,12 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   `linux-vX.Y.Z`, separate from the Windows ones. On start it checks the
   `mctde-installer-linux=` line in mctde-Link's `latest.txt` and, if a newer
   version is listed, offers to replace the AppImage with that release's.
-- **Compatibility:** the AppImage needs a glibc at least as new as the machine it
-  was built on (currently Arch Linux). It runs on Arch and Arch-based distros; on
-  older distros, build from source (below) or use the Windows exe under Wine.
+- **Compatibility:** the AppImage runs on any x86_64 distro with glibc 2.31 or
+  newer: SteamOS / Steam Deck, Ubuntu 20.04+, Debian 11+, Linux Mint 20+,
+  Pop!\_OS, Fedora 32+, openSUSE, Arch and its derivatives, and so on. It is
+  built in Valve's Steam Runtime (sniper) SDK, the same base Steam games are
+  built against, and needs no FUSE or libfuse2. The GUI works on X11 and
+  Wayland; the CLI needs no display.
 
 The command-line tool is inside the AppImage too: run it with arguments, e.g.
 `./mctde-Installer-x86_64.AppImage detectall` or
@@ -170,13 +173,20 @@ Linux (native): needs g++ (C++17), libcurl and SDL3 (3.2 or newer).
 
 ```
 sudo pacman -S --needed base-devel curl sdl3     # Arch
-./build_linux.sh                                 # build/linux/mctde-installer(-gui)
-./make_appimage.sh                               # build/linux/mctde-Installer-x86_64.AppImage
+./build_linux.sh                                 # build/linux/mctde-installer(-gui), for this machine
 ```
 
-`make_appimage.sh` needs [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy)
-and [appimagetool](https://github.com/AppImage/appimagetool); see the top of the
-script. The Windows exe can also be cross-built with MinGW
+**Release AppImage:** `./make_appimage.sh` (needs Docker or Podman, e.g.
+`sudo pacman -S --needed podman`). It builds inside Valve's Steam Runtime sniper
+SDK container (glibc 2.31), so the AppImage runs on every distro listed above
+whatever distro you build it on. It builds SDL3 there and fetches
+[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy),
+[appimagetool](https://github.com/AppImage/appimagetool) and the AppImage
+runtime itself (cached in `build/portable/`), then fails the build if anything in
+the AppImage needs a glibc newer than 2.31. Output:
+`build/linux/mctde-Installer-x86_64.AppImage`. Always release this build: one
+made with `MCTDE_NATIVE=1 ./make_appimage.sh` only runs on distros as new as the
+build machine. The Windows exe can also be cross-built with MinGW
 (`x86_64-w64-mingw32-g++`).
 
 ## Usage

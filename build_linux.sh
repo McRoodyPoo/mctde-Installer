@@ -6,7 +6,7 @@
 # Output goes to build/linux/. Run from anywhere.
 set -euo pipefail
 cd "$(dirname "$0")"
-OUT=build/linux
+OUT=${OUT:-build/linux}
 mkdir -p "$OUT/obj"
 
 CXX=${CXX:-g++}
@@ -42,7 +42,7 @@ COREOBJ=$(for f in $CORE; do printf "%s " "$OUT/obj/$f.o"; done)
 IMGUIOBJ=$(for f in $IMGUI; do printf "%s " "$OUT/obj/$(basename $f).o"; done)
 
 echo "Linking..."
-$CXX -static-libstdc++ -static-libgcc -o $OUT/mctde-installer $OUT/obj/main.o $COREOBJ $OUT/obj/miniz.o $CURL_LIBS -pthread
+$CXX -static-libstdc++ -static-libgcc -o $OUT/mctde-installer $OUT/obj/main.o $COREOBJ $OUT/obj/miniz.o $CURL_LIBS -ldl -pthread
 $CXX -static-libstdc++ -static-libgcc -o $OUT/mctde-installer-gui $OUT/obj/GuiLinux.o $COREOBJ $IMGUIOBJ $OUT/obj/miniz.o \
-     $OUT/obj/linux_assets.o $SDL_LIBS $CURL_LIBS -pthread
+     $OUT/obj/linux_assets.o $SDL_LIBS $CURL_LIBS -ldl -pthread
 echo "Built $OUT/mctde-installer and $OUT/mctde-installer-gui"
