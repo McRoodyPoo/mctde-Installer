@@ -13,6 +13,7 @@
 #include "DisplayConfig.h"
 #ifndef _WIN32
 #include "LaunchLinux.h"
+#include "SteamShortcut.h"
 #endif
 #include "Dcx.h"
 #include "Download.h"
@@ -51,6 +52,7 @@ int main(int argc, char** argv) {
         std::printf("  mctde-installer displayconfig [localAppDataDir]\n");
 #ifndef _WIN32
         std::printf("  mctde-installer play <dataDir>   (start an installed copy through Proton)\n");
+        std::printf("  mctde-installer add-to-steam <dataDir>   (add it to Steam as a non-Steam game)\n");
 #endif
         std::printf("  mctde-installer install <dataDir> [namelist]\n");
         std::printf("  mctde-installer unpack  <dataDir> <out> [namelist]\n");
@@ -145,7 +147,20 @@ int main(int argc, char** argv) {
             // play <dataDir> : launch an installed copy through Steam's Proton
             if (argc < 3) { std::printf("usage: play <dataDir>\n"); return 1; }
             std::string msg;
-            bool ok = launchGameLinux(argv[2], msg, [](const std::string& s) { std::printf("%s\n", s.c_str()); });
+            // Waits until the game exits (a Steam shortcut runs this, and Steam
+            // shows the game as running only while we're alive).
+            bool ok = launchGameLinux(argv[2], msg, [](const std::string& s) { std::printf("%s\n", s.c_str()); },
+                                      /*wait=*/true);
+            std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
+            return ok ? 0 : 2;
+        }
+        if (cmd == "add-to-steam") {
+            // add-to-steam <dataDir> [--wait-for-steam-exit] : non-Steam shortcut
+            if (argc < 3) { std::printf("usage: add-to-steam <dataDir> [--wait-for-steam-exit]\n"); return 1; }
+            std::string msg;
+            bool ok = (argc >= 4 && std::string(argv[3]) == "--wait-for-steam-exit")
+                          ? addSteamShortcutAfterSteamExits(argv[2], msg)
+                          : addToSteam(argv[2], msg);
             std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
             return ok ? 0 : 2;
         }

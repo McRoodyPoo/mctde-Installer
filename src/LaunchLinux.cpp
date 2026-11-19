@@ -2,6 +2,8 @@
 #include "Detect.h"
 
 #include <fcntl.h>
+#include <sys/wait.h>
+#include <cerrno>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -109,9 +111,9 @@ bool steamRunning() {
     return false;
 }
 
-// fork + setsid + exec, detached, with extra environment, cwd and output file.
-static bool spawnDetached(const std::vector<std::string>& argv, const std::string& cwd,
-                          const std::vector<std::string>& extraEnv, const std::string& logFile) {
+bool runProcess(const std::vector<std::string>& argv, const std::string& cwd,
+                const std::vector<std::string>& extraEnv, const std::string& logFile,
+                bool detach, int* exitCode) {
     std::vector<std::string> env;
     for (char** e = environ; *e; ++e) {
         std::string kv = *e;
@@ -133,7 +135,7 @@ static bool spawnDetached(const std::vector<std::string>& argv, const std::strin
     pid_t pid = fork();
     if (pid < 0) return false;
     if (pid == 0) {
-        setsid();
+        if (detach) setsid();
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) _exit(126);
         int fd = logFile.empty() ? open("/dev/null", O_WRONLY)
                                  : open(logFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -143,11 +145,15 @@ static bool spawnDetached(const std::vector<std::string>& argv, const std::strin
         execvpe(av[0], av.data(), ev.data());
         _exit(127);
     }
-    return true;   // not waited on: the child outlives the installer
+    if (detach) return true;   // not waited on: the child outlives the installer
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (exitCode) *exitCode = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    return true;
 }
 
 bool launchGameLinux(const std::string& dataDir, std::string& message,
-                     void (*log)(const std::string&)) {
+                     void (*log)(const std::string&), bool wait) {
     auto say = [&](const std::string& s) { if (log) log(s); };
 
     fs::path data(dataDir);
@@ -165,7 +171,7 @@ bool launchGameLinux(const std::string& dataDir, std::string& message,
     // The game needs the Steam client (it runs as Spacewar, app 480).
     if (!steamRunning()) {
         say("Starting Steam...");
-        spawnDetached({"steam", "-silent"}, "", {}, "");
+        runProcess({"steam", "-silent"}, "", {}, "", /*detach=*/true);
         for (int i = 0; i < 30 && !steamRunning(); ++i)
             std::this_thread::sleep_for(std::chrono::seconds(1));
         if (!steamRunning()) { message = "Steam did not start; start it and click Play again"; return false; }
@@ -190,10 +196,17 @@ bool launchGameLinux(const std::string& dataDir, std::string& message,
         "SteamGameId=480",
     };
     say("Launching " + exe.filename().string() + "...");
-    if (!spawnDetached({(fs::path(ps.proton) / "proton").string(), "run", exe.string()},
-                       data.string(), env, logFile)) {
+    // waitforexitandrun also waits for the prefix's wineserver, i.e. for the
+    // launcher *and* the game it starts.
+    int rc = 0;
+    if (!runProcess({(fs::path(ps.proton) / "proton").string(), wait ? "waitforexitandrun" : "run", exe.string()},
+                    data.string(), env, logFile, /*detach=*/!wait, &rc)) {
         message = "could not start Proton";
         return false;
+    }
+    if (wait) {
+        message = "Game exited (Proton exit code " + std::to_string(rc) + ")";
+        return true;
     }
     message = "Started " + exe.filename().string() + " with " + fs::path(ps.proton).filename().string() +
               (logFile.empty() ? "" : " (log: " + logFile + ")");

@@ -106,7 +106,20 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   prefix, else Proton Experimental, else the newest installed), in PTDE's Proton
   prefix. Steam must be running (it's started if not); it shows the game as
   Spacewar (app 480). Proton's output goes to `~/.cache/mctde-installer/proton.log`.
-  From the command line: `mctde-installer play <DATA dir>`.
+  From the command line: `mctde-installer play <DATA dir>` (waits until the game
+  exits).
+- **Add to Steam:** after an install the installer offers to add the copy to
+  your Steam library as a non-Steam game ("Dark Souls (mctde)"), the way Quiver
+  Launcher does it. The shortcut runs the AppImage with `play <DATA dir>`, which
+  starts the game through Proton and stays open until it exits, so Steam,
+  Big Picture and Game Mode show it as running. Steam rewrites
+  `shortcuts.vdf` when it exits, so the file is only changed while Steam is
+  closed: if Steam is running, a small background worker waits for Steam to exit
+  and adds the shortcut then (restart Steam once). Other shortcuts are kept, an
+  existing entry for the same copy is updated, and the original file is backed
+  up as `shortcuts.vdf.mctde-backup`. From the command line:
+  `mctde-installer add-to-steam <DATA dir>`. Keep the AppImage where it is
+  afterwards; the shortcut points at it.
 - **Releases and updates:** the Linux build has its own releases, tagged
   `linux-vX.Y.Z`, separate from the Windows ones. On start it checks the
   `mctde-installer-linux=` line in mctde-Link's `latest.txt` and, if a newer
