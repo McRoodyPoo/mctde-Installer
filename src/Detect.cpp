@@ -610,6 +610,7 @@ std::vector<BackupInfo> findBackups(const std::string& dataDir) {
         std::wstring n = it->path().filename().wstring();
         for (wchar_t& c : n) c = towlower(c);
         if (n.rfind(L"data-backup", 0) != 0) continue;
+        if (n.size() >= 8 && n.compare(n.size() - 8, 8, L".partial") == 0) continue;  // unfinished
         if (!fs::exists(it->path() / "DARKSOULS.exe", ec)) continue;
 
         std::string p = it->path().string();
