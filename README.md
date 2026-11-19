@@ -84,9 +84,17 @@ data/           generated namelist(s)
 Run the installer under Wine or Proton. On top of the Windows Steam registry
 lookup, it finds a native Linux Steam (`~/.local/share/Steam`, `~/.steam/steam`,
 Flatpak and Snap) and reads its `libraryfolders.vdf`, turning the Unix library
-paths into the drive Wine maps them to (normally `Z:`). The fallback scan looks
-through your home folder and `/mnt`, `/media` and `/run/media` instead of
-crawling all of `/`.
+paths into the drive Wine maps them to (normally `Z:`, or `\\?\unix\...` when
+no drive maps `/`). Wine does not pass `$HOME` through, so the home folder comes
+from `WINEHOMEDIR` (then `HOME`, `/home/$USER`, and the folders in `/home`).
+Every renamed copy in a library's `steamapps/common` that holds
+`DATA/DARKSOULS.exe` is listed too. The fallback scan looks through your home
+folder, `/mnt`, `/media` and `/run/media`, then the non-system top-level folders
+of `/` (skipping `/proc`, `/usr`, `/etc` and the like).
+
+If nothing is found, the start of the log (and `mctde-installer detectall`)
+shows what detection saw: Wine version, `HOME`/`WINEHOMEDIR`, the homes, and
+each Steam root and library it checked.
 
 ## Build
 
