@@ -79,33 +79,75 @@ third_party/
 data/           generated namelist(s)
 ```
 
-## Linux (Wine / Proton)
+## Linux
 
-Run the installer under Wine or Proton. On top of the Windows Steam registry
-lookup, it finds a native Linux Steam (`~/.local/share/Steam`, `~/.steam/steam`,
-Flatpak and Snap) and reads its `libraryfolders.vdf`, turning the Unix library
-paths into the drive Wine maps them to (normally `Z:`, or `\\?\unix\...` when
-no drive maps `/`). Wine does not pass `$HOME` through, so the home folder comes
-from `WINEHOMEDIR` (then `HOME`, `/home/$USER`, and the folders in `/home`).
-Every renamed copy in a library's `steamapps/common` that holds
-`DATA/DARKSOULS.exe` is listed too. The fallback scan looks through your home
-folder, `/mnt`, `/media` and `/run/media`, then the non-system top-level folders
-of `/` (skipping `/proc`, `/usr`, `/etc` and the like).
+### Native (recommended)
 
-The DSFix display tweaks (windowed, no in-game AA) are written to
-`DarkSouls.ini` in the installer's own prefix and also in Steam's Proton prefix
-for PTDE (`steamapps/compatdata/211420`), which is where the game reads them.
+Download `mctde-Installer-x86_64.AppImage` from the latest release, make it
+executable and run it (from your file manager, or `chmod +x` then
+`./mctde-Installer-x86_64.AppImage`). It's the same installer with a native
+Linux window; the game, mctde-Link and the launcher still run through Proton.
+
+- **Where it looks:** your Linux Steam (`~/.local/share/Steam`, `~/.steam/...`,
+  Flatpak, Snap) and every library in its `libraryfolders.vdf`, including renamed
+  copies in `steamapps/common`; then a bounded scan of your home folder, `/mnt`,
+  `/media`, `/run/media` and the non-system top-level folders of `/`.
+- **Display settings:** the DSFix tweaks (windowed, no in-game AA) are written to
+  `DarkSouls.ini` in Steam's Proton prefix for PTDE
+  (`steamapps/compatdata/211420`). If the game has never been started through
+  Steam that prefix doesn't exist yet: launch it once, then run the installer
+  again.
+- **Case-sensitive filesystems:** archives are unpacked in a fixed order (so the
+  result is byte-identical to a Windows install) and the mod's files are merged
+  into the existing folders whatever their case.
+- **Playing:** for the Steam copy, **Play** starts the game through Steam. For any
+  other copy, add its `mctde_launcher.exe` to Steam as a non-Steam game and turn
+  on Proton under Properties > Compatibility.
+- **Compatibility:** the AppImage needs a glibc at least as new as the machine it
+  was built on (currently Arch Linux). It runs on Arch and Arch-based distros; on
+  older distros, build from source (below) or use the Windows exe under Wine.
+
+The command-line tool is inside the AppImage too: run it with arguments, e.g.
+`./mctde-Installer-x86_64.AppImage detectall` or
+`./mctde-Installer-x86_64.AppImage fullinstall <DATA dir>`.
+
+### Under Wine / Proton
+
+The Windows `mctde-Installer.exe` also works under Wine or Proton. On top of the
+Windows Steam registry lookup it finds a native Linux Steam the same way and
+turns the Unix paths into the drive Wine maps them to (normally `Z:`, or
+`\\?\unix\...` when no drive maps `/`). Wine does not pass `$HOME` through, so
+the home folder comes from `WINEHOMEDIR` (then `HOME`, `/home/$USER`, and the
+folders in `/home`). Display settings go to the installer's own prefix and to
+Steam's Proton prefix for PTDE.
+
+### Diagnostics
 
 If nothing is found, the start of the log (and `mctde-installer detectall`)
-shows what detection saw: Wine version, `HOME`/`WINEHOMEDIR`, the homes, and
-each Steam root and library it checked.
+shows what detection saw: platform (native or Wine version), `HOME` /
+`WINEHOMEDIR`, the homes, each Steam root, Proton prefix and library it checked.
 
 ## Build
+
+Windows (MSVC): `build.bat` (CLI) and `build_gui.bat` (GUI), or
 
 ```
 cmake -S . -B build
 cmake --build build --config Release
 ```
+
+Linux (native): needs g++ (C++17), libcurl and SDL3 (3.2 or newer).
+
+```
+sudo pacman -S --needed base-devel curl sdl3     # Arch
+./build_linux.sh                                 # build/linux/mctde-installer(-gui)
+./make_appimage.sh                               # build/linux/mctde-Installer-x86_64.AppImage
+```
+
+`make_appimage.sh` needs [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy)
+and [appimagetool](https://github.com/AppImage/appimagetool); see the top of the
+script. The Windows exe can also be cross-built with MinGW
+(`x86_64-w64-mingw32-g++`).
 
 ## Usage
 
@@ -154,5 +196,11 @@ modding community:
 - **[Rich Geldreich](https://github.com/richgel999)**:
   [miniz](https://github.com/richgel999/miniz), public domain (Unlicense),
   vendored in `third_party/`.
+- **[Omar Cornut](https://github.com/ocornut)**:
+  [Dear ImGui](https://github.com/ocornut/imgui) (MIT), vendored in
+  `third_party/imgui/` for the Linux GUI, with its bundled Roboto and Cousine
+  fonts (Apache License 2.0).
+- **[SDL](https://www.libsdl.org/)** (zlib license) and
+  **[libcurl](https://curl.se/)** (curl license), used by the Linux build.
 
 Original game by **FromSoftware** and **Bandai Namco**.

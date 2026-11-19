@@ -15,3 +15,7 @@ Dark Souls modding community. Thanks to everyone below:
 - **Sean Pesce**: DsGameFiles (`FileList.h`), where the namelist was collated.
 - **Rich Geldreich**: [miniz](https://github.com/richgel999/miniz), public
   domain (Unlicense), vendored in `third_party/`.
+- **Omar Cornut**: [Dear ImGui](https://github.com/ocornut/imgui) (MIT), vendored
+  in `third_party/imgui/` for the Linux GUI, with its Roboto and Cousine fonts
+  (Apache License 2.0).
+- **SDL** (zlib license) and **libcurl** (curl license), used by the Linux build.
