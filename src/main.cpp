@@ -11,6 +11,9 @@
 #include "Bnd3.h"
 #include "Detect.h"
 #include "DisplayConfig.h"
+#ifndef _WIN32
+#include "LaunchLinux.h"
+#endif
 #include "Dcx.h"
 #include "Download.h"
 #include "Extract.h"
@@ -46,6 +49,9 @@ int main(int argc, char** argv) {
         std::printf("usage:\n");
         std::printf("  mctde-installer detect\n");
         std::printf("  mctde-installer displayconfig [localAppDataDir]\n");
+#ifndef _WIN32
+        std::printf("  mctde-installer play <dataDir>   (start an installed copy through Proton)\n");
+#endif
         std::printf("  mctde-installer install <dataDir> [namelist]\n");
         std::printf("  mctde-installer unpack  <dataDir> <out> [namelist]\n");
         std::printf("  mctde-installer patchexe <inExe> <outExe>\n");
@@ -133,6 +139,17 @@ int main(int argc, char** argv) {
             std::printf("found %d install(s)\n", n);
             return 0;
         }
+
+#ifndef _WIN32
+        if (cmd == "play") {
+            // play <dataDir> : launch an installed copy through Steam's Proton
+            if (argc < 3) { std::printf("usage: play <dataDir>\n"); return 1; }
+            std::string msg;
+            bool ok = launchGameLinux(argv[2], msg, [](const std::string& s) { std::printf("%s\n", s.c_str()); });
+            std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
+            return ok ? 0 : 2;
+        }
+#endif
 
         if (cmd == "displayconfig") {
             // displayconfig [localAppDataDir] : apply the DSFix display tweaks to

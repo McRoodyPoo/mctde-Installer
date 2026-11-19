@@ -382,6 +382,9 @@ static std::vector<std::pair<fs::path, int>> linuxScanRoots() {
     return roots;
 }
 
+std::vector<std::string> steamLibraryPaths() { return allLibraryPaths(); }
+std::vector<std::string> linuxSteamRootPaths() { return linuxSteamRoots(); }
+
 std::vector<std::string> protonGameLocalAppData() {
     std::vector<std::string> out;
     if (!onLinux()) return out;

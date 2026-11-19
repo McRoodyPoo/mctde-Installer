@@ -15,11 +15,10 @@
 
 #include "Detect.h"
 #include "Installer.h"
+#include "LaunchLinux.h"
 #include "Update.h"
 
-#include <spawn.h>
 #include <unistd.h>
-#include <sys/wait.h>
 
 #include <algorithm>
 #include <cctype>
@@ -31,7 +30,6 @@
 #include <thread>
 #include <vector>
 
-extern char **environ;
 namespace fs = std::filesystem;
 using namespace mctde;
 
@@ -63,7 +61,7 @@ static const float LOG_TOP = BANNER_H + 188;
 // ---- events from worker threads to the UI thread ----
 struct Event {
     enum Type { LogLine, Found, ScanDone, Progress, Done, RestoreDone,
-                UpdateAvail, UpdateNone, UpdateDone, Browsed } type;
+                UpdateAvail, UpdateNone, UpdateDone, Browsed, LaunchDone } type;
     int pct = -1;
     bool ok = false;
     std::string text;
@@ -92,7 +90,8 @@ static bool g_logScroll = false;
 static std::string g_lastLog;
 static int  g_pct = -1;
 static bool g_scanning = false, g_installing = false, g_restoring = false,
-            g_updating = false, g_done = false, g_checkingUpdate = true;
+            g_updating = false, g_done = false, g_checkingUpdate = true,
+            g_launching = false;
 static bool g_quit = false;
 static std::string g_selDir, g_restoreBackup, g_latest;
 
@@ -258,14 +257,16 @@ static void handleBrowsed(const std::string& picked) {
     logAppend("Added: " + s);
 }
 
-// Launch the Steam copy through Steam (Proton), which is how the game runs on
-// Linux; mctde-Link then hands over to the mctde launcher.
-static void launchViaSteam() {
-    const char* argv[] = {"xdg-open", "steam://rungameid/211420", nullptr};
-    pid_t pid;
-    if (posix_spawnp(&pid, "xdg-open", nullptr, nullptr, (char* const*)argv, environ) == 0) {
-        std::thread([pid] { int st; waitpid(pid, &st, 0); }).detach();
-    }
+// Start the installed copy through Steam's Proton (see LaunchLinux). Runs on a
+// worker: it may first have to start Steam and wait for it.
+static void startLaunch() {
+    g_launching = true;
+    std::string dir = g_selDir;
+    std::thread([dir] {
+        std::string msg;
+        bool ok = launchGameLinux(dir, msg, [](const std::string& line) { postText(Event::LogLine, line); });
+        postText(Event::LaunchDone, msg, -1, ok);
+    }).detach();
 }
 
 // ---- event handling (UI thread) ----
@@ -299,14 +300,7 @@ static void drainEvents() {
             logAppend(e.text); g_lastLog = e.text;
             g_pct = e.ok ? 100 : -1;
             g_done = e.ok;
-            if (e.ok) {
-                if (isSteamInstallPath(g_selDir)) {
-                    logAppend("Click Play to start Dark Souls through Steam (Proton).");
-                } else {
-                    logAppend("To play this copy: in Steam, add mctde_launcher.exe from this DATA folder as a");
-                    logAppend("non-Steam game and turn on Proton under Properties > Compatibility.");
-                }
-            }
+            if (e.ok) logAppend("Click Play to start Dark Souls (through Proton; Steam shows it as Spacewar).");
             break;
         case Event::RestoreDone:
             g_restoring = g_installing = false;
@@ -333,6 +327,12 @@ static void drainEvents() {
             else { g_pct = -1; startScan(); }
             break;
         case Event::Browsed: handleBrowsed(e.text); break;
+        case Event::LaunchDone:
+            g_launching = false;
+            logAppend(e.text);
+            if (e.ok) g_quit = true;                 // the game is on its way
+            else message("Could not start the game", e.text);
+            break;
         }
     }
 }
@@ -491,7 +491,7 @@ static void drawUI(SDL_Texture* banner, ImFont* mono, float s) {
     ImGui::SetCursorPos(ImVec2(24 * s, (BANNER_H + 8) * s));
     ImGui::TextColored(CLR_DIM, "Select the install to patch:");
 
-    const bool busy = g_installing || g_updating;
+    const bool busy = g_installing || g_updating || g_launching;
     const bool modalUp = g_modal != Modal::None;
 
     // Install list.
@@ -568,11 +568,12 @@ static void drawUI(SDL_Texture* banner, ImFont* mono, float s) {
         openModal(g_modalBackups.empty() ? Modal::NoBackups : Modal::Restore);
     }
     if (button(g_done ? "Close" : "Cancel", WIN_W - 224, by, 90, 34, !busy, s)) g_quit = true;
-    const bool canPlay = g_done && isSteamInstallPath(g_selDir);
-    const char* instLabel = g_installing && !g_restoring ? "Installing..." : (g_done ? (canPlay ? "Play" : "Installed") : "Install");
-    bool instEnabled = g_done ? canPlay : (!busy && !modalUp && !g_checkingUpdate && hasSel);
+    const char* instLabel = g_launching ? "Starting..."
+                          : g_installing && !g_restoring ? "Installing..."
+                          : g_done ? "Play" : "Install";
+    bool instEnabled = g_done ? (!g_launching && !modalUp) : (!busy && !modalUp && !g_checkingUpdate && hasSel);
     if (button(instLabel, WIN_W - 124, by, 100, 34, instEnabled, s)) {
-        if (g_done) { launchViaSteam(); g_quit = true; }
+        if (g_done) startLaunch();
         else if (g_installs[g_sel].kind == InstallKind::Unknown) openModal(Modal::Unknown);
         else { g_modalPacked = g_installs[g_sel].state == GameState::Packed; openModal(Modal::Backup); }
     }

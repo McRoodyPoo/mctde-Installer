@@ -27,6 +27,13 @@ bool isWine();
 // it as ("Z:\home\me\x"). Non-Unix paths are returned unchanged.
 std::string unixToDosPath(const std::string& unixPath);
 
+// Every Steam library folder found (Windows registry Steam plus, on Linux /
+// under Wine, the native Linux Steam's libraries), deduplicated.
+std::vector<std::string> steamLibraryPaths();
+
+// The native Linux Steam install roots found (empty on plain Windows).
+std::vector<std::string> linuxSteamRootPaths();
+
 // Under Wine: the %LOCALAPPDATA% folder (as a DOS path) of every Steam Proton
 // prefix for Dark Souls PTDE (app 211420) found in the Steam libraries, i.e.
 // <library>\steamapps\compatdata\211420\pfx\drive_c\users\steamuser\AppData\Local.
