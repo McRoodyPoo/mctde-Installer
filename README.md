@@ -109,7 +109,8 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   From the command line: `mctde-installer play <DATA dir>` (waits until the game
   exits).
 - **Add to Steam:** after an install the installer offers to add the copy to
-  your Steam library as a non-Steam game ("Dark Souls (mctde)"), the way Quiver
+  your Steam library as a non-Steam game ("DARK SOULS™: Prepare To Die Edition
+  (mctde)"), the way Quiver
   Launcher does it. The shortcut runs the AppImage with `play <DATA dir>`, which
   starts the game through Proton and stays open until it exits, so Steam,
   Big Picture and Game Mode show it as running. Steam rewrites

@@ -181,12 +181,14 @@ static std::string shortcutIcon() {
 static std::string quote(const std::string& s) { return "\"" + s + "\""; }
 
 std::string steamShortcutName(const std::string& dataDir) {
-    // The canonical Steam copy is just "Dark Souls (mctde)"; any other copy
-    // gets its folder name so several installs stay apart in the library.
+    // The game's Steam store name plus "(mctde)". The canonical Steam copy gets
+    // just that; any other copy also gets its folder name so several installs
+    // stay apart in the library.
+    static const std::string base = "DARK SOULS\u2122: Prepare To Die Edition (mctde)";
     fs::path data(dataDir);
     std::string folder = data.parent_path().filename().string();
-    if (folder == "Dark Souls Prepare to Die Edition") return "Dark Souls (mctde)";
-    return "Dark Souls (mctde) - " + folder;
+    if (folder == "Dark Souls Prepare to Die Edition") return base;
+    return base + " - " + folder;
 }
 
 bool addSteamShortcutNow(const std::string& dataDir, std::string& message) {
