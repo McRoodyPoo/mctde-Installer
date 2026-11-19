@@ -47,6 +47,7 @@ using namespace mctde;
 #define WM_UPDATE_NONE  (WM_APP + 6) // no update (or check failed) -> just scan
 #define WM_UPDATE_DONE  (WM_APP + 7) // wParam = ok?1:0, lParam = new wchar_t[] message
 #define WM_RESTOREDONE  (WM_APP + 8) // wParam = ok?1:0, lParam = new wchar_t[] message
+#define WM_LOGLINE      (WM_APP + 9) // lParam = new wchar_t[] line for the log
 
 // ---- palette ----
 static const COLORREF CLR_BG     = RGB(24, 24, 28);
@@ -138,6 +139,10 @@ static void logAppend(const std::wstring& line) {
 
 // ---- worker threads ----
 static DWORD WINAPI ScanThread(LPVOID) {
+    // Log what detection sees first (Wine, homes, Steam roots, libraries), so a
+    // scan that finds nothing on Linux can be diagnosed from the log.
+    for (const std::string& line : detectDiagnostics())
+        if (g_hwnd) PostMessageW(g_hwnd, WM_LOGLINE, 0, (LPARAM)dupw(widen(line)));
     findAllDataDirs([](const GameInstall& gi) {
         if (g_hwnd) PostMessageW(g_hwnd, WM_FOUND, 0, (LPARAM)new GameInstall(gi));
     });
@@ -740,6 +745,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (di->CtlType == ODT_LISTBOX) { paintListItem(di); return TRUE; }
         if (di->CtlType == ODT_BUTTON) { paintButton(di); return TRUE; }
         break;
+    }
+    case WM_LOGLINE: {
+        wchar_t* m = (wchar_t*)lParam;
+        if (m) { logAppend(m); delete[] m; }
+        return 0;
     }
     case WM_FOUND: {
         GameInstall* gi = (GameInstall*)lParam;

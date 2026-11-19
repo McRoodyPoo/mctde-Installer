@@ -27,6 +27,12 @@ bool isWine();
 // it as ("Z:\home\me\x"). Non-Unix paths are returned unchanged.
 std::string unixToDosPath(const std::string& unixPath);
 
+// Human-readable lines describing what detection sees: Wine or not (and the
+// version), HOME / WINEHOMEDIR / USER / USERNAME, where Unix "/" is mapped, the
+// Unix homes found, every Steam root and library checked (and whether each
+// exists / holds PTDE). Printed at the start of a scan to debug Linux setups.
+std::vector<std::string> detectDiagnostics();
+
 // Find the Dark Souls: Prepare to Die Edition DATA folder by reading Steam's
 // install path + library folders (and, under Wine, the native Linux Steam's
 // library folders). Returns the DATA dir (containing

@@ -50,6 +50,7 @@ static std::string steamRoot() {
 // invisible to the lookup above. Wine maps the Unix filesystem onto a drive
 // letter (normally Z:), so we find the Linux Steam roots from $HOME and convert
 // their Unix paths to DOS paths the rest of the code can use as-is.
+// (Wine does not pass $HOME through; the home comes from WINEHOMEDIR.)
 // ---------------------------------------------------------------------------
 
 bool isWine() {
@@ -60,6 +61,15 @@ bool isWine() {
     return wine;
 }
 
+// Wine's version string ("9.0", "11.22", ...), or "" when not under Wine.
+static std::string wineVersion() {
+    typedef const char* (CDECL *WineGetVersion)(void);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    WineGetVersion fn = ntdll ? (WineGetVersion)GetProcAddress(ntdll, "wine_get_version") : nullptr;
+    const char* v = fn ? fn() : nullptr;
+    return v ? std::string(v) : std::string();
+}
+
 static std::string narrow(const std::wstring& w) {
     if (w.empty()) return "";
     int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -68,9 +78,24 @@ static std::string narrow(const std::wstring& w) {
     return out;
 }
 
+// An environment variable of this (Windows) process, or "" if unset.
+// Note Wine does NOT pass the Unix $HOME through; it sets WINEHOMEDIR instead.
+static std::string envVar(const wchar_t* name) {
+    wchar_t buf[4096];
+    DWORD n = GetEnvironmentVariableW(name, buf, 4096);
+    if (n == 0 || n >= 4096) return "";
+    return narrow(std::wstring(buf, n));
+}
+
+static std::string lower(std::string s) {
+    for (char& c : s) c = char(std::tolower((unsigned char)c));
+    return s;
+}
+
 // Convert a Unix path ("/home/me/...") to the DOS path Wine exposes it as
 // ("Z:\home\me\..."). Uses Wine's own kernel32 export so a remapped drive
-// letter still works; falls back to the default Z: mapping.
+// letter still works (and, with no drive mapped to "/", Wine returns a
+// "\\?\unix\home\me" path that still opens). Falls back to the default Z:.
 std::string unixToDosPath(const std::string& unixPath) {
     if (unixPath.empty() || unixPath[0] != '/') return unixPath;
     typedef WCHAR* (CDECL *WineGetDosFileName)(LPCSTR);
@@ -90,40 +115,95 @@ std::string unixToDosPath(const std::string& unixPath) {
     return out;
 }
 
-// The Unix home directory(ies) to look in. Wine passes $HOME through from the
-// Unix side; if it is missing, fall back to every folder under /home.
-static std::vector<std::string> linuxHomes() {
-    std::vector<std::string> homes;
-    const char* h = std::getenv("HOME");
-    if (h && h[0] == '/') homes.push_back(unixToDosPath(h));
-    if (homes.empty()) {
-        std::error_code ec;
-        for (fs::directory_iterator it(unixToDosPath("/home"), fs::directory_options::skip_permission_denied, ec), end;
-             it != end; it.increment(ec)) {
-            if (ec) { ec.clear(); continue; }
-            if (it->is_directory(ec)) homes.push_back(it->path().string());
-        }
+// WINEHOMEDIR is an NT path: "\??\Z:\home\me", or "\??\unix\home\me" when no
+// drive letter maps "/". Turn it into a DOS path we can open.
+static std::string wineHomeDirToDos(const std::string& nt) {
+    std::string p = nt;
+    if (p.rfind("\\??\\", 0) == 0 || p.rfind("\\\\?\\", 0) == 0) p = p.substr(4);
+    if (p.size() >= 2 && p[1] == ':') return p;                    // Z:\home\me
+    if (lower(p).rfind("unix\\", 0) == 0) {                         // unix\home\me
+        std::string u = p.substr(4);
+        for (char& c : u) if (c == '\\') c = '/';
+        return unixToDosPath(u);                                    // -> Z:\.. or \\?\unix\..
     }
-    return homes;
+    return "";
 }
 
-// Native Linux Steam install roots, as DOS paths. Covers the regular package,
-// its ~/.steam symlinks, Flatpak and Snap, plus the root Proton advertises.
-static std::vector<std::string> linuxSteamRoots() {
-    std::vector<std::string> roots;
-    if (!isWine()) return roots;
-    if (const char* p = std::getenv("STEAM_COMPAT_CLIENT_INSTALL_PATH"))
-        if (p[0] == '/') roots.push_back(unixToDosPath(p));
-    for (const std::string& home : linuxHomes()) {
+// Two paths naming the same existing directory (symlinks, case, slashes).
+static bool sameDir(const std::string& a, const std::string& b) {
+    if (lower(a) == lower(b)) return true;
+    std::error_code ec;
+    return fs::equivalent(fs::path(a), fs::path(b), ec);
+}
+
+// The Unix home directory(ies), as DOS paths, most trustworthy first:
+// WINEHOMEDIR (set by Wine), $HOME (only if something passed it through),
+// /home/$USER (or $USERNAME), then every folder under /home. Duplicates and
+// missing folders are dropped.
+static std::vector<std::string> linuxHomes() {
+    static const std::vector<std::string> cached = [] {
+        std::vector<std::string> homes;
+        if (!isWine()) return homes;
+        auto add = [&](const std::string& dos) {
+            if (dos.empty()) return;
+            std::error_code ec;
+            if (!fs::is_directory(fs::path(dos), ec)) return;
+            for (const std::string& h : homes) if (sameDir(h, dos)) return;
+            homes.push_back(dos);
+        };
+        add(wineHomeDirToDos(envVar(L"WINEHOMEDIR")));
+        std::string h = envVar(L"HOME");
+        if (!h.empty() && h[0] == '/') add(unixToDosPath(h));
+        for (const wchar_t* var : {L"USER", L"USERNAME", L"WINEUSERNAME"}) {
+            std::string u = envVar(var);
+            if (!u.empty() && u.find_first_of("/\\") == std::string::npos)
+                add(unixToDosPath("/home/" + u));
+        }
+        std::error_code ec;
+        for (fs::directory_iterator it(fs::path(unixToDosPath("/home")),
+                                       fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code ec2;
+            if (it->is_directory(ec2)) add(it->path().string());
+        }
+        return homes;
+    }();
+    return cached;
+}
+
+// Every place a native Linux Steam might live, as DOS paths (whether or not it
+// exists). Covers the regular package, its ~/.steam symlinks, Flatpak and Snap,
+// plus the root Proton advertises.
+static std::vector<std::string> linuxSteamRootCandidates() {
+    std::vector<std::string> c;
+    if (!isWine()) return c;
+    auto add = [&](std::string p) {
+        while (p.size() > 3 && (p.back() == '\\' || p.back() == '/')) p.pop_back();
+        for (const std::string& q : c) if (lower(q) == lower(p)) return;
+        c.push_back(p);
+    };
+    std::string p = envVar(L"STEAM_COMPAT_CLIENT_INSTALL_PATH");
+    if (!p.empty() && p[0] == '/') add(unixToDosPath(p));
+    for (const std::string& home : linuxHomes())
         for (const char* rel : {"\\.local\\share\\Steam", "\\.steam\\steam", "\\.steam\\root",
                                 "\\.steam\\debian-installation",
                                 "\\.var\\app\\com.valvesoftware.Steam\\.local\\share\\Steam",
                                 "\\.var\\app\\com.valvesoftware.Steam\\.steam\\steam",
-                                "\\snap\\steam\\common\\.local\\share\\Steam"}) {
-            std::error_code ec;
-            std::string r = home + rel;
-            if (fs::is_directory(fs::path(r) / "steamapps", ec)) roots.push_back(r);
-        }
+                                "\\snap\\steam\\common\\.local\\share\\Steam"})
+            add(home + rel);
+    return c;
+}
+
+// The candidates above that really hold a Steam install, with the ~/.steam
+// symlinks to the same folder collapsed.
+static std::vector<std::string> linuxSteamRoots() {
+    std::vector<std::string> roots;
+    for (const std::string& r : linuxSteamRootCandidates()) {
+        std::error_code ec;
+        if (!fs::is_directory(fs::path(r) / "steamapps", ec)) continue;
+        bool dup = false;
+        for (const std::string& prev : roots) if (sameDir(prev, r)) { dup = true; break; }
+        if (!dup) roots.push_back(r);
     }
     return roots;
 }
@@ -135,8 +215,7 @@ static std::vector<std::string> libraryPaths(const std::string& steam) {
     if (steam.empty()) return libs;
     libs.push_back(steam);
 
-    std::string vdf = steam + "\\steamapps\\libraryfolders.vdf";
-    std::ifstream f(vdf, std::ios::binary);
+    std::ifstream f(fs::path(steam) / "steamapps" / "libraryfolders.vdf", std::ios::binary);
     if (!f) return libs;
     std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
@@ -156,7 +235,9 @@ static std::vector<std::string> libraryPaths(const std::string& steam) {
             else path += raw[i];
         }
         if (!path.empty() && path[0] == '/') path = unixToDosPath(path);
-        libs.push_back(path);
+        bool dup = false;
+        for (const std::string& l : libs) if (sameDir(l, path)) { dup = true; break; }
+        if (!dup) libs.push_back(path);
         pos = b + 1;
     }
     return libs;
@@ -167,7 +248,11 @@ static std::vector<std::string> libraryPaths(const std::string& steam) {
 static std::vector<std::string> allLibraryPaths() {
     std::vector<std::string> libs = libraryPaths(steamRoot());
     for (const std::string& root : linuxSteamRoots())
-        for (std::string& l : libraryPaths(root)) libs.push_back(std::move(l));
+        for (std::string& l : libraryPaths(root)) {
+            bool dup = false;
+            for (const std::string& prev : libs) if (sameDir(prev, l)) { dup = true; break; }
+            if (!dup) libs.push_back(std::move(l));
+        }
     return libs;
 }
 
@@ -180,15 +265,98 @@ static char wineRootDrive() {
     return (r.size() >= 2 && r[1] == ':') ? char(std::toupper((unsigned char)r[0])) : 0;
 }
 
-// Extra scan roots under Wine: the Unix home and the usual mount points for
-// other disks.
+// Mount points scanned on their own (deeper than the generic root folders).
+static const char* const kLinuxMounts[] = {"/mnt", "/media", "/run/media", "/data", "/games"};
+
+// Top-level folders of the Linux root ("/") worth scanning: everything except
+// system folders, hidden ones (/.snapshots holds whole filesystem copies), and
+// the ones scanned separately (/home, the mount points, /run).
+static std::vector<std::string> linuxRootFolders() {
+    std::vector<std::string> out;
+    if (!isWine()) return out;
+    static const char* const skip[] = {
+        "proc", "sys", "dev", "usr", "bin", "sbin", "etc", "boot", "var", "tmp",
+        "snap", "nix", "lost+found", "run", "home", "mnt", "media", "data", "games",
+        "efi", "root"};
+    std::error_code ec;
+    for (fs::directory_iterator it(fs::path(unixToDosPath("/")),
+                                   fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code ec2;
+        if (!it->is_directory(ec2)) continue;
+        std::string n;
+        try { n = lower(it->path().filename().string()); } catch (const std::exception&) { continue; }
+        if (n.empty() || n[0] == '.' || n.rfind("lib", 0) == 0) continue;
+        bool skipped = false;
+        for (const char* s : skip) if (n == s) { skipped = true; break; }
+        if (!skipped) out.push_back(it->path().string());
+    }
+    return out;
+}
+
+// Extra scan roots under Wine, in order: the Unix home(s), the usual mount
+// points for other disks, then the remaining top-level folders of "/".
 static std::vector<std::pair<fs::path, int>> linuxScanRoots() {
     std::vector<std::pair<fs::path, int>> roots;
     if (!isWine()) return roots;
     for (const std::string& h : linuxHomes()) roots.push_back({h, 5});
-    for (const char* m : {"/mnt", "/media", "/run/media", "/data", "/games"})
-        roots.push_back({unixToDosPath(m), 5});
+    for (const char* m : kLinuxMounts) roots.push_back({unixToDosPath(m), 5});
     return roots;
+}
+
+std::vector<std::string> detectDiagnostics() {
+    std::vector<std::string> out;
+    auto yn = [](const std::string& p, const char* sub = nullptr) {
+        std::error_code ec;
+        fs::path q(p);
+        if (sub) q /= sub;
+        return fs::exists(q, ec) ? "ok" : "missing";
+    };
+    auto show = [](const std::string& v) { return v.empty() ? std::string("(unset)") : v; };
+
+    if (!isWine()) {
+        out.push_back("Platform: Windows (not Wine)");
+    } else {
+        out.push_back("Platform: Wine " + wineVersion());
+        out.push_back("  HOME=" + show(envVar(L"HOME")) +
+                      "  WINEHOMEDIR=" + show(envVar(L"WINEHOMEDIR")));
+        out.push_back("  USER=" + show(envVar(L"USER")) +
+                      "  USERNAME=" + show(envVar(L"USERNAME")));
+        char d = wineRootDrive();
+        out.push_back("  Unix / is " + unixToDosPath("/") +
+                      (d ? std::string(" (drive ") + d + ":)" : std::string(" (no drive letter)")));
+        std::vector<std::string> homes = linuxHomes();
+        if (homes.empty()) out.push_back("  Home: none found");
+        for (const std::string& h : homes) out.push_back("  Home: " + h);
+        std::string top;
+        for (const std::string& d : linuxRootFolders())
+            top += (top.empty() ? "" : ", ") + fs::path(d).filename().string();
+        out.push_back("  Also scanning under /: " + (top.empty() ? std::string("(nothing)") : top));
+    }
+
+    std::string reg = steamRoot();
+    out.push_back("Steam (registry): " + (reg.empty() ? std::string("(none)")
+                                                      : reg + " [" + yn(reg, "steamapps") + "]"));
+    if (isWine()) {
+        std::vector<std::string> found = linuxSteamRoots();
+        for (const std::string& r : linuxSteamRootCandidates()) {
+            std::error_code ec;
+            if (!fs::is_directory(fs::path(r) / "steamapps", ec)) continue;  // keep it short
+            bool primary = false;
+            for (const std::string& f : found) if (lower(f) == lower(r)) primary = true;
+            out.push_back("Linux Steam: " + r + (primary ? " [ok]" : " [ok, same as above]"));
+        }
+        if (found.empty()) out.push_back("Linux Steam: none found (checked " +
+                                         std::to_string(linuxSteamRootCandidates().size()) +
+                                         " locations)");
+    }
+    const char* sub = "steamapps\\common\\Dark Souls Prepare to Die Edition\\DATA\\DARKSOULS.exe";
+    for (const std::string& lib : allLibraryPaths()) {
+        std::error_code ec;
+        bool ptde = fs::exists(fs::path(lib) / sub, ec);
+        out.push_back("Library: " + lib + " [" + yn(lib) + "]" + (ptde ? " <- PTDE here" : ""));
+    }
+    return out;
 }
 
 std::string detectSteamDataDir() {
@@ -211,6 +379,30 @@ static std::string knownFolder(REFKNOWNFOLDERID id) {
     }
     if (p) CoTaskMemFree(p);
     return out;
+}
+
+// Roots for the bounded recursive scan, in priority order, with max depths:
+// the installer's own folder, the user's Desktop/Downloads/Documents, (under
+// Wine) the Unix home(s) and mount points, every drive root except the one
+// mapping "/", and finally the non-system top-level folders of "/".
+static std::vector<std::pair<fs::path, int>> scanRoots() {
+    wchar_t self[MAX_PATH] = {0};
+    GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::vector<std::pair<fs::path, int>> roots;
+    roots.push_back({fs::path(self).parent_path(), 6});
+    roots.push_back({knownFolder(FOLDERID_Desktop), 4});
+    roots.push_back({knownFolder(FOLDERID_Downloads), 4});
+    roots.push_back({knownFolder(FOLDERID_Documents), 4});
+    for (const auto& r : linuxScanRoots()) roots.push_back(r);
+    DWORD drives = GetLogicalDrives();
+    const char unixRoot = wineRootDrive();
+    for (int i = 0; i < 26; ++i) {
+        if (!(drives & (1u << i))) continue;
+        if (char('A' + i) == unixRoot) continue;
+        roots.push_back({std::string(1, char('A' + i)) + ":\\", 4});  // drive roots, shallow
+    }
+    for (const std::string& d : linuxRootFolders()) roots.push_back({d, 4});
+    return roots;
 }
 
 // Directories that never hold the game and only waste the scan budget (or
@@ -276,22 +468,7 @@ std::string findDataDir() {
 
     // 3. Bounded recursive scan, sharing one ~20s budget across roots.
     ULONGLONG deadline = GetTickCount64() + 20000;
-    wchar_t self[MAX_PATH] = {0};
-    GetModuleFileNameW(nullptr, self, MAX_PATH);
-
-    std::vector<std::pair<fs::path, int>> roots;
-    roots.push_back({fs::path(self).parent_path(), 6});          // installer's own folder
-    roots.push_back({knownFolder(FOLDERID_Desktop), 4});
-    roots.push_back({knownFolder(FOLDERID_Downloads), 4});
-    roots.push_back({knownFolder(FOLDERID_Documents), 4});
-    for (const auto& r : linuxScanRoots()) roots.push_back(r);
-    for (int i = 0; i < 26; ++i) {
-        if (!(drives & (1u << i))) continue;
-        if (char('A' + i) == unixRoot) continue;
-        roots.push_back({std::string(1, char('A' + i)) + ":\\", 4}); // drive roots, shallow
-    }
-
-    for (const auto& r : roots) {
+    for (const auto& r : scanRoots()) {
         if (GetTickCount64() > deadline) break;
         std::string hit = searchRoot(r.first, r.second, deadline);
         if (!hit.empty()) return hit;
@@ -354,10 +531,25 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
 
     // 1. Steam libraries (registry + libraryfolders.vdf, plus a native Linux
     //    Steam under Wine): fast, most likely.
-    for (const std::string& lib : allLibraryPaths()) {
+    //    Then any other folder in steamapps\common holding DATA\DARKSOULS.exe
+    //    (renamed copies such as "Dark Souls Prepare to Die Edition - 1.2.3"),
+    //    which sit too deep for the bounded scan below.
+    const std::vector<std::string> libs = allLibraryPaths();
+    for (const std::string& lib : libs) {
         std::error_code ec;
         std::string data = lib + sub;
         if (fs::exists(fs::path(data) / "DARKSOULS.exe", ec)) reportInstall(data);
+    }
+    for (const std::string& lib : libs) {
+        std::error_code ec;
+        for (fs::directory_iterator it(fs::path(lib) / "steamapps" / "common",
+                                       fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code ec2;
+            if (!it->is_directory(ec2)) continue;
+            fs::path data = it->path() / "DATA";
+            if (fs::exists(data / "DARKSOULS.exe", ec2)) reportInstall(data.string());
+        }
     }
 
     // 2. Fixed Steam-library spots on every drive.
@@ -377,22 +569,10 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
         }
     }
 
-    // 3. Bounded recursive scan (installer folder, user folders, drive roots).
+    // 3. Bounded recursive scan (installer folder, user folders, Linux home and
+    //    mounts, drive roots, then the rest of the Linux root).
     ULONGLONG deadline = GetTickCount64() + 20000;
-    wchar_t self[MAX_PATH] = {0};
-    GetModuleFileNameW(nullptr, self, MAX_PATH);
-    std::vector<std::pair<fs::path, int>> roots;
-    roots.push_back({fs::path(self).parent_path(), 6});
-    roots.push_back({knownFolder(FOLDERID_Desktop), 4});
-    roots.push_back({knownFolder(FOLDERID_Downloads), 4});
-    roots.push_back({knownFolder(FOLDERID_Documents), 4});
-    for (const auto& r : linuxScanRoots()) roots.push_back(r);
-    for (int i = 0; i < 26; ++i) {
-        if (!(drives & (1u << i))) continue;
-        if (char('A' + i) == unixRoot) continue;
-        roots.push_back({std::string(1, char('A' + i)) + ":\\", 4});
-    }
-    for (const auto& r : roots) {
+    for (const auto& r : scanRoots()) {
         if (GetTickCount64() > deadline) break;
         searchRootAll(r.first, r.second, deadline, reportInstall);
     }

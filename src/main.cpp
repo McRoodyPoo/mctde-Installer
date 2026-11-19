@@ -114,6 +114,10 @@ int main(int argc, char** argv) {
         }
 
         if (cmd == "detectall") {
+            for (const std::string& line : detectDiagnostics())
+                std::printf("%s\n", line.c_str());
+            std::printf("scanning...\n");
+            std::fflush(stdout);
             int n = 0;
             findAllDataDirs([&](const GameInstall& gi) {
                 const char* st = gi.state == GameState::Packed ? "packed"
