@@ -1,5 +1,6 @@
 #include "Update.h"
 #include "Download.h"
+#include "Release.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -19,25 +20,26 @@
 
 namespace mctde {
 
-// Bump this on every installer release, in lockstep with latest.txt.
-const char* const kInstallerVersion = "0.3.4";
+// One version for both platforms. Bump on every installer release, in lockstep
+// with latest.txt's "mctde-installer=" line.
+const char* const kInstallerVersion = "0.4.0";
 
-// Version comes from the central latest.txt (same manifest the in-game updater
-// reads). The installer exe itself is attached to each mctde-Installer release.
-static const char* kManifestUrl =
-    "https://raw.githubusercontent.com/McRoodyPoo/mctde-Link/main/latest.txt";
+// Each version is one GitHub release tagged "v<version>" carrying a zip per
+// platform (see Release.h). The self-update takes the zip for the OS it was
+// built for and pulls the program out of it.
+static const char* kReleaseUrlPrefix =
+    "https://github.com/McRoodyPoo/mctde-Installer/releases/download/v";
 #ifdef _WIN32
-static const char* kInstallerExeUrl =
-    "https://github.com/McRoodyPoo/mctde-Installer/releases/latest/download/mctde-Installer.exe";
+static const char* kProgramName = "mctde-Installer.exe";
 #else
-// The native Linux build is versioned and released on its own: latest.txt's
-// "mctde-installer-linux=X.Y.Z" names the newest one, published as the release
-// tagged "linux-vX.Y.Z" with the AppImage attached.
-static const char* kAppImageUrlPrefix =
-    "https://github.com/McRoodyPoo/mctde-Installer/releases/download/linux-v";
-static const char* kAppImageName = "mctde-Installer-x86_64.AppImage";
-static std::string g_latestLinux;   // set by fetchLatestInstallerVersion()
+static const char* kProgramName = "mctde-Installer-x86_64.AppImage";
 #endif
+static std::string g_latest;   // set by fetchLatestInstallerVersion()
+
+// Release zip for this OS, e.g. .../v0.4.0/mctde-Installer-linux.zip
+static std::string releaseZipUrl(const std::string& version) {
+    return std::string(kReleaseUrlPrefix) + version + "/mctde-Installer-" + platformName() + ".zip";
+}
 
 static std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \r\n\t");
@@ -60,31 +62,6 @@ static std::wstring selfPathW() {
     return p;
 }
 #endif
-
-// Pull this build's installer version out of the key=value manifest:
-// "mctde-installer=" on Windows, "mctde-installer-linux=" on native Linux
-// (case-insensitive, '_' treated as '-'). Matches the lenient format the
-// in-game checker parses.
-static std::string parseInstallerVersion(const std::string& text) {
-    std::stringstream ss(text);
-    std::string line;
-    while (std::getline(ss, line)) {
-        size_t hash = line.find('#');
-        if (hash != std::string::npos) line = line.substr(0, hash);
-        size_t eq = line.find('=');
-        if (eq == std::string::npos) eq = line.find(':');
-        if (eq == std::string::npos) continue;
-        std::string key = trim(line.substr(0, eq));
-        for (char& c : key) { c = (char)tolower((unsigned char)c); if (c == '_') c = '-'; }
-#ifdef _WIN32
-        if (key == "mctde-installer" || key == "mctdeinstaller")
-#else
-        if (key == "mctde-installer-linux" || key == "mctdeinstaller-linux")
-#endif
-            return trim(line.substr(eq + 1));
-    }
-    return "";
-}
 
 bool isNewer(const std::string& latest, const std::string& current) {
     auto parts = [](const std::string& v) -> std::vector<int> {
@@ -110,23 +87,13 @@ bool isNewer(const std::string& latest, const std::string& current) {
     return false;
 }
 
+// Older builds read "mctde-installer-linux=" on Linux; that line stays in
+// latest.txt (kept equal to "mctde-installer=") so they still update.
 std::string fetchLatestInstallerVersion() {
-    std::error_code ec;
-    std::filesystem::path tmp = std::filesystem::temp_directory_path(ec);
-    if (ec) return "";
-    tmp /= "mctde_latest.txt";
-    std::string err;
-    if (!downloadUrl(kManifestUrl, tmp.string(), err)) return "";
-    std::ifstream f{tmp};
-    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    f.close();
-    std::filesystem::remove(tmp, ec);
-#ifdef _WIN32
-    return parseInstallerVersion(text);
-#else
-    g_latestLinux = parseInstallerVersion(text);
-    return g_latestLinux;
-#endif
+    std::string text = fetchManifest();
+    if (text.empty()) return "";
+    g_latest = manifestValue(text, "mctde-installer");
+    return g_latest;
 }
 
 #ifdef _WIN32
@@ -144,8 +111,10 @@ bool selfUpdate(std::string& err, const ProgressFn& progress) {
     const std::wstring newP = self + L".new";
     const std::wstring oldP = self + L".old";
 
-    // 1. Download the new exe alongside ourselves.
-    if (!downloadUrl(kInstallerExeUrl, narrow(newP), err, progress)) {
+    // 1. Download this OS's release zip and pull the new exe out of it,
+    //    alongside ourselves.
+    if (g_latest.empty()) { err = "no installer version advertised"; return false; }
+    if (!fetchFromReleaseZip(releaseZipUrl(g_latest), kProgramName, narrow(newP), err, progress)) {
         DeleteFileW(newP.c_str());
         return false;
     }
@@ -213,10 +182,10 @@ bool selfUpdate(std::string& err, const ProgressFn& progress) {
     const std::string self = appimage;
     const std::string newP = self + ".new";
 
-    // 1. Download the new AppImage alongside ourselves.
-    if (g_latestLinux.empty()) { err = "no Linux version advertised"; return false; }
-    const std::string url = kAppImageUrlPrefix + g_latestLinux + "/" + kAppImageName;
-    if (!downloadUrl(url, newP, err, progress)) {
+    // 1. Download this OS's release zip and pull the new AppImage out of it,
+    //    alongside ourselves.
+    if (g_latest.empty()) { err = "no installer version advertised"; return false; }
+    if (!fetchFromReleaseZip(releaseZipUrl(g_latest), kProgramName, newP, err, progress)) {
         ::unlink(newP.c_str());
         return false;
     }

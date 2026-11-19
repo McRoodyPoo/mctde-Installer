@@ -20,3 +20,6 @@ DARKSOULS.exe
 
 # Test artifacts
 /testdata/hashes*.txt
+
+# Release packaging output (tools/package_release.sh)
+/dist/

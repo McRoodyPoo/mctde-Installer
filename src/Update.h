@@ -10,9 +10,9 @@
 
 namespace mctde {
 
-// Version baked into this build. Bump on every installer release and keep the
-// "mctde-installer=" line in latest.txt in sync. The native Linux build is
-// released separately (tag "linux-vX.Y.Z") and tracks "mctde-installer-linux=".
+// Version baked into this build, shared by the Windows and Linux builds. Bump on
+// every installer release and keep latest.txt's "mctde-installer=" line in sync
+// (plus "mctde-installer-linux=", which pre-0.4.0 Linux builds still read).
 extern const char* const kInstallerVersion;
 
 // Fetch latest.txt and return the advertised installer version ("" on any
@@ -23,7 +23,9 @@ std::string fetchLatestInstallerVersion();
 // 'latest' returns false, so a malformed manifest never forces an update.
 bool isNewer(const std::string& latest, const std::string& current);
 
-// Download the newest installer, swap it in for the running exe, and relaunch
+// Download the newest installer (this OS's zip from the "v<version>" release:
+// mctde-Installer-windows.zip or mctde-Installer-linux.zip), swap it in for the
+// running exe/AppImage, and relaunch
 // it (inheriting our elevated token, so no second UAC prompt). On success the
 // caller should exit so the new instance takes over. false + err on any failure,
 // in which case the running installer is left untouched and should carry on.

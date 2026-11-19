@@ -30,8 +30,10 @@ installer:
    extracts it over the game root, so its `DATA/` contents merge in.
 3. **Downloads mctde-Link** (the `d3d9.dll` proxy/overlay) from its latest GitHub
    release and extracts it into `DATA/`.
-4. **Downloads the launcher** (`mctde_launcher.exe`) from its latest GitHub
-   release into `DATA/`.
+4. **Downloads the launcher** (`mctde_launcher.exe`, from
+   `mctde-launcher-windows.zip` on its latest GitHub release) into `DATA/`. On
+   Linux the native launcher (`mctde-launcher-linux.zip`) is installed next to
+   it.
 5. **Writes `steam_appid.txt`** (`480`, Spacewar) into `DATA/` so the game
    launches under the mod's Steam setup.
 
@@ -83,10 +85,11 @@ data/           generated namelist(s)
 
 ### Native (recommended)
 
-Download `mctde-Installer-x86_64.AppImage` from the latest Linux release
-(tagged `linux-v...`), make it
-executable and run it (from your file manager, or `chmod +x` then
-`./mctde-Installer-x86_64.AppImage`). It's the same installer with a native
+Download `mctde-Installer-linux.zip` from the
+[latest release](https://github.com/McRoodyPoo/mctde-Installer/releases/latest),
+unzip it and run `mctde-Installer-x86_64.AppImage` (from your file manager, or
+`./mctde-Installer-x86_64.AppImage`; run `chmod +x` on it first if your unzip
+tool dropped the executable bit). It's the same installer with a native
 Linux window; the game, mctde-Link and the launcher still run through Proton.
 
 - **Where it looks:** your Linux Steam (`~/.local/share/Steam`, `~/.steam/...`,
@@ -103,11 +106,10 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   into the existing folders whatever their case.
 - **Linux launcher:** besides the Windows `mctde_launcher.exe`, the install puts
   the native Linux mctde launcher (`mctde-launcher` + `mctde-launcher-cli`) in
-  the `DATA` folder. It comes from mctde-Launcher's `linux` branch: its
-  `latest.txt` names the exact release file and its SHA-256, which the installer
-  checks (only files from mctde-Launcher's own releases are accepted). If no
-  Linux launcher is published yet, the install carries on with just the Windows
-  one. CLI: `mctde-installer install-linux-launcher <DATA dir>`.
+  the `DATA` folder. It comes from `mctde-launcher-linux.zip` on the
+  mctde-Launcher release named by `latest.txt`'s `mctde-launcher=` line, checked
+  against its published SHA-256. If it can't be fetched, the install carries on
+  with just the Windows one. CLI: `mctde-installer install-linux-launcher <DATA dir>`.
 - **Playing:** after an install, **Play** opens the native Linux launcher if
   it's installed (or runs its CLI's `play` where Qt 6 isn't available).
   Otherwise it starts that copy's `mctde_launcher.exe` through your Steam Proton (the one that created PTDE's
@@ -129,10 +131,11 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   up as `shortcuts.vdf.mctde-backup`. From the command line:
   `mctde-installer add-to-steam <DATA dir>`. Keep the AppImage where it is
   afterwards; the shortcut points at it.
-- **Releases and updates:** the Linux build has its own releases, tagged
-  `linux-vX.Y.Z`, separate from the Windows ones. On start it checks the
-  `mctde-installer-linux=` line in mctde-Link's `latest.txt` and, if a newer
-  version is listed, offers to replace the AppImage with that release's.
+- **Releases and updates:** Windows and Linux share one version number and one
+  release per version (see [Releases](#releases)). On start the installer checks
+  the `mctde-installer=` line in mctde-Link's `latest.txt` and, if a newer
+  version is listed, replaces the AppImage with the one from that release's
+  `mctde-Installer-linux.zip`.
 - **Compatibility:** the AppImage runs on any x86_64 distro with glibc 2.31 or
   newer: SteamOS / Steam Deck, Ubuntu 20.04+, Debian 11+, Linux Mint 20+,
   Pop!\_OS, Fedora 32+, openSUSE, Arch and its derivatives, and so on. It is
@@ -188,6 +191,31 @@ the AppImage needs a glibc newer than 2.31. Output:
 made with `MCTDE_NATIVE=1 ./make_appimage.sh` only runs on distros as new as the
 build machine. The Windows exe can also be cross-built with MinGW
 (`x86_64-w64-mingw32-g++`).
+
+## Releases
+
+Every version is one GitHub release, tagged `vX.Y.Z`, carrying a zip per
+platform. Both builds update themselves from it: each one reads the shared
+`mctde-installer=` version from mctde-Link's `latest.txt` and downloads the zip
+for the OS it runs on.
+
+| Asset | Contents |
+|---|---|
+| `mctde-Installer-windows.zip` | `mctde-Installer.exe`, README, LICENSE, CREDITS |
+| `mctde-Installer-linux.zip` | `mctde-Installer-x86_64.AppImage`, README, LICENSE, CREDITS |
+| `*.zip.sha256` | SHA-256 of each zip; the self-update refuses a zip that doesn't match |
+| `mctde-Installer.exe` | the bare exe, for Windows installers older than 0.4.0 |
+
+To cut a release:
+
+1. Bump `kInstallerVersion` in `src/Update.cpp`.
+2. Build both: `build_gui.bat` on Windows (`build/mctde-Installer.exe`) and
+   `./make_appimage.sh` (`build/linux/mctde-Installer-x86_64.AppImage`).
+3. `tools/package_release.sh X.Y.Z` writes everything to `dist/vX.Y.Z/` and
+   prints the remaining steps: publish the `vX.Y.Z` release (marked latest), a
+   `linux-vX.Y.Z` release with the bare AppImage for Linux installers older than
+   0.4.0, and only then set `mctde-installer=` and `mctde-installer-linux=` in
+   mctde-Link's `latest.txt`.
 
 ## Usage
 

@@ -4,6 +4,9 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -129,6 +132,54 @@ ExtractStats extractZip(const std::string& zipPath, const std::string& outDir,
 
     mz_zip_reader_end(&zip);
     return st;
+}
+
+// Paths are UTF-8. The zip is read and the entry written through std::filesystem
+// (wide APIs on Windows) rather than miniz's fopen, so a non-ASCII Windows user
+// folder still works.
+bool extractZipEntry(const std::string& zipPath, const std::string& baseName,
+                     const std::string& outPath, std::string& err) {
+    std::vector<char> bytes;
+    {
+        std::ifstream f(fs::u8path(zipPath), std::ios::binary);
+        if (!f) { err = "cannot open zip: " + zipPath; return false; }
+        bytes.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
+    mz_zip_archive zip;
+    std::memset(&zip, 0, sizeof(zip));
+    if (bytes.empty() || !mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0)) {
+        err = "not a valid zip: " + zipPath;
+        return false;
+    }
+    auto lower = [](std::string s) {
+        for (char& c : s) c = char(std::tolower((unsigned char)c));
+        return s;
+    };
+    const std::string want = lower(baseName);
+    bool ok = false, found = false;
+    mz_uint count = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < count && !found; ++i) {
+        mz_zip_archive_file_stat s;
+        if (!mz_zip_reader_file_stat(&zip, i, &s) || mz_zip_reader_is_file_a_directory(&zip, i))
+            continue;
+        std::string n = s.m_filename;
+        for (char& c : n) if (c == '\\') c = '/';
+        size_t slash = n.find_last_of('/');
+        if (lower(slash == std::string::npos ? n : n.substr(slash + 1)) != want) continue;
+        found = true;
+        size_t size = 0;
+        void* data = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);   // CRC-checked
+        if (data) {
+            std::ofstream o(fs::u8path(outPath), std::ios::binary | std::ios::trunc);
+            o.write(static_cast<const char*>(data), (std::streamsize)size);
+            ok = o.good();
+            mz_free(data);
+        }
+        if (!ok) err = "could not extract " + baseName + " from " + zipPath;
+    }
+    mz_zip_reader_end(&zip);
+    if (!found) err = baseName + " is not in " + zipPath;
+    return ok;
 }
 
 } // namespace mctde

@@ -1,7 +1,8 @@
 #include "LinuxLauncher.h"
 #include "Download.h"
+#include "Extract.h"
 #include "LaunchLinux.h"
-#include "Sha256.h"
+#include "Release.h"
 
 #include <dlfcn.h>
 #include <sys/stat.h>
@@ -18,32 +19,17 @@ namespace fs = std::filesystem;
 
 namespace mctde {
 
-static const char* kManifestUrl =
-    "https://raw.githubusercontent.com/McRoodyPoo/mctde-Launcher/linux/latest.txt";
-// Launcher archives may only come from mctde-Launcher's own release assets.
-static const char* kAssetPrefix =
-    "https://github.com/McRoodyPoo/mctde-Launcher/releases/download/";
+// The Linux launcher is released alongside the Windows one: the "v<version>"
+// release of mctde-Launcher carries mctde-launcher-linux.zip, and the version is
+// latest.txt's shared "mctde-launcher=" line.
+static const char* kReleaseUrlPrefix =
+    "https://github.com/McRoodyPoo/mctde-Launcher/releases/download/v";
 
-static std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
-    return a == std::string::npos ? "" : s.substr(a, b - a + 1);
-}
-
-static std::string kv(const std::string& text, const std::string& key) {
-    std::istringstream in(text);
-    std::string line;
-    while (std::getline(in, line)) {
-        size_t h = line.find('#');
-        if (h != std::string::npos) line = line.substr(0, h);
-        size_t eq = line.find('=');
-        if (eq != std::string::npos && trim(line.substr(0, eq)) == key) return trim(line.substr(eq + 1));
-    }
-    return "";
-}
-
-static std::string readFile(const fs::path& p) {
+static bool isElf(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
-    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    char m[4] = {0};
+    f.read(m, 4);
+    return f.gcount() == 4 && m[0] == 0x7f && m[1] == 'E' && m[2] == 'L' && m[3] == 'F';
 }
 
 bool installLinuxLauncher(const std::string& dataDir, std::string& message,
@@ -56,62 +42,45 @@ bool installLinuxLauncher(const std::string& dataDir, std::string& message,
     fs::create_directories(work, ec);
     struct Cleanup { fs::path p; ~Cleanup() { std::error_code e; fs::remove_all(p, e); } } cleanup{work};
 
-    // 1. The manifest on mctde-Launcher's linux branch.
-    const char* over = std::getenv("MCTDE_LINUX_LAUNCHER_MANIFEST");
-    std::string err, manifest;
-    if (over && *over) {
-        manifest = readFile(over);
+    // 1. Which version, then that release's Linux zip (SHA-256 checked against
+    //    its sidecar). MCTDE_LINUX_LAUNCHER_ZIP=<local zip> skips the network
+    //    (testing only).
+    std::string err, ver;
+    fs::path pkg = work / "launcher.zip";
+    const char* localZip = std::getenv("MCTDE_LINUX_LAUNCHER_ZIP");
+    if (localZip && *localZip) {
+        ver = "(local)";
+        fs::copy_file(localZip, pkg, fs::copy_options::overwrite_existing, ec);
+        if (ec) { message = "could not read " + std::string(localZip); return false; }
     } else {
-        fs::path m = work / "latest.txt";
-        if (!downloadUrl(kManifestUrl, m.string(), err)) {
-            message = "no Linux launcher published yet (" + err + ")";
-            return false;
-        }
-        manifest = readFile(m);
-    }
-    std::string ver = kv(manifest, "mctde-launcher-linux");
-    std::string url = kv(manifest, "mctde-launcher-linux-url");
-    std::string sha = kv(manifest, "mctde-launcher-linux-sha256");
-    for (char& c : sha) c = (char)std::tolower((unsigned char)c);
-    bool shaOk = sha.size() == 64;
-    for (char c : sha) if (!std::isxdigit((unsigned char)c)) shaOk = false;
-    bool urlOk = url.rfind(kAssetPrefix, 0) == 0 || (over && *over && !url.empty() && url[0] == '/');
-    if (ver.empty() || !urlOk || !shaOk) {
-        message = "the Linux launcher manifest is incomplete or points outside mctde-Launcher's releases";
-        return false;
+        ver = manifestValue(fetchManifest(), "mctde-launcher");
+        if (ver.empty()) { message = "could not read the launcher version from latest.txt"; return false; }
+        say("Downloading the Linux launcher " + ver + "...", -1);
+        std::string url = std::string(kReleaseUrlPrefix) + ver + "/mctde-launcher-linux.zip";
+        if (!downloadVerifiedZip(url, pkg.string(), err)) { message = "download failed: " + err; return false; }
     }
 
-    // 2. The release archive, verified against the manifest's SHA-256.
-    say("Downloading the Linux launcher " + ver + "...", -1);
-    fs::path pkg = work / "launcher.tar.gz";
-    if (url[0] == '/') fs::copy_file(url, pkg, fs::copy_options::overwrite_existing, ec);
-    else if (!downloadUrl(url, pkg.string(), err)) { message = "download failed: " + err; return false; }
-    std::string bytes = readFile(pkg);
-    std::string got = sha256Hex((const uint8_t*)bytes.data(), bytes.size());
-    if (got != sha) { message = "checksum mismatch (expected " + sha + ", got " + got + ")"; return false; }
-
-    // 3. Unpack (system tar; the archive is a plain .tar.gz) and copy the binaries in.
-    int rc = -1;
-    if (!runProcess({"tar", "-xzf", pkg.string(), "-C", work.string()}, "", {}, "", false, &rc) || rc != 0) {
-        message = "could not unpack the Linux launcher (tar exit " + std::to_string(rc) + ")";
-        return false;
-    }
-    int copied = 0;
-    for (fs::recursive_directory_iterator it(work, ec), end; !ec && it != end; it.increment(ec)) {
-        std::string name = it->path().filename().string();
-        if (!it->is_regular_file(ec)) continue;
-        bool bin = name == "mctde-launcher" || name == "mctde-launcher-cli";
-        if (!bin && name != "README-LINUX.md") continue;
+    // 2. Pull out the two programs (and the readme) and swap them in atomically.
+    const char* names[] = {"mctde-launcher", "mctde-launcher-cli", "README-LINUX.md"};
+    for (const char* name : names) {
+        bool bin = std::string(name) != "README-LINUX.md";
         fs::path dst = data / name;
         fs::path tmp = dst; tmp += ".mctde-new";
+        if (!extractZipEntry(pkg.string(), name, tmp.string(), err)) {
+            if (!bin) continue;   // the readme is optional
+            message = "the Linux launcher zip is missing " + std::string(name);
+            return false;
+        }
+        if (bin && !isElf(tmp)) {
+            fs::remove(tmp, ec);
+            message = std::string(name) + " in the Linux launcher zip isn't a Linux program";
+            return false;
+        }
+        if (bin) ::chmod(tmp.c_str(), 0755);
         std::error_code ce;
-        fs::copy_file(it->path(), tmp, fs::copy_options::overwrite_existing, ce);
-        if (!ce && bin) ::chmod(tmp.c_str(), 0755);
-        if (!ce) fs::rename(tmp, dst, ce);   // atomic swap, safe even if it is running
-        if (ce) { message = "could not install " + name + ": " + ce.message(); return false; }
-        if (bin) ++copied;
+        fs::rename(tmp, dst, ce);   // atomic swap, safe even if it is running
+        if (ce) { message = "could not install " + std::string(name) + ": " + ce.message(); return false; }
     }
-    if (copied < 2) { message = "the Linux launcher archive didn't contain both binaries"; return false; }
     message = "Linux launcher " + ver + " installed (mctde-launcher, mctde-launcher-cli)";
     return true;
 }

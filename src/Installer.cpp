@@ -4,6 +4,7 @@
 #include "Download.h"
 #include "ExePatch.h"
 #include "Extract.h"
+#include "Release.h"
 #include "Unpacker.h"
 #ifndef _WIN32
 #include "LinuxLauncher.h"
@@ -30,7 +31,9 @@ static const char* kModUrl =
     "https://pub-a585848bebaf4be2a03b1c1051f1ba79.r2.dev/mctde-0.88.zip";
 static const char* kLinkUrl =
     "https://github.com/McRoodyPoo/mctde-Link/releases/latest/download/mctde-Link.zip";
-static const char* kLauncherUrl =
+static const char* kLauncherZipUrl =
+    "https://github.com/McRoodyPoo/mctde-Launcher/releases/latest/download/mctde-launcher-windows.zip";
+static const char* kLauncherExeUrl =   // pre-0.6.0 releases: the bare exe
     "https://github.com/McRoodyPoo/mctde-Launcher/releases/latest/download/mctde_launcher.exe";
 
 // Pick a backup folder name that doesn't collide with an existing one: returns
@@ -290,19 +293,27 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         extractZip(linkZip.string(), dataDir, err);
         fs::remove(linkZip, ec);
 
-        // 4. Launcher -> DATA (a single exe, not an archive).
+        // 4. Windows launcher -> DATA, taken out of mctde-launcher-windows.zip.
+        //    Installed on Linux too: it runs through Proton, and it's what
+        //    mctde-Link's launcher guard reopens. Falls back to the bare
+        //    mctde_launcher.exe asset older releases carried.
         step("Downloading the launcher...", -1);
-        std::string launcherFrom = std::string("    from ") + kLauncherUrl;
+        std::string launcherFrom = std::string("    from ") + kLauncherZipUrl;
         step(launcherFrom, 0);
-        if (!downloadUrl(kLauncherUrl, (data / "mctde_launcher.exe").string(), err,
-                         dlProgress(progress, launcherFrom))) {
-            message = "launcher download failed: " + err;
-            return InstallResult::Failed;
+        const std::string launcherExe = (data / "mctde_launcher.exe").string();
+        if (!fetchFromReleaseZip(kLauncherZipUrl, "mctde_launcher.exe", launcherExe, err,
+                                 dlProgress(progress, launcherFrom))) {
+            launcherFrom = std::string("    from ") + kLauncherExeUrl;
+            step(launcherFrom, 0);
+            if (!downloadUrl(kLauncherExeUrl, launcherExe, err, dlProgress(progress, launcherFrom))) {
+                message = "launcher download failed: " + err;
+                return InstallResult::Failed;
+            }
         }
 #ifndef _WIN32
-        // 4b. Linux: the native launcher from mctde-Launcher's linux branch, next
-        //     to the Windows one. Optional: if it isn't published or can't be
-        //     fetched, the Windows launcher above still works through Proton.
+        // 4b. Linux: the native launcher (mctde-launcher-linux.zip), next to the
+        //     Windows one. Optional: if it can't be fetched, the Windows
+        //     launcher above still works through Proton.
         {
             std::string lm;
             if (installLinuxLauncher(dataDir, lm, step)) step(lm + ".", -1);

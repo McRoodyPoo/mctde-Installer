@@ -14,6 +14,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <vector>
 
@@ -82,7 +83,10 @@ static bool httpGetToFileW(const std::wstring& url, const std::string& outPath,
                                         clen, &cllen, WINHTTP_NO_HEADER_INDEX))
                     total = _wcstoui64(clen, nullptr, 10);
 
-                std::ofstream o(outPath, std::ios::binary | std::ios::trunc);
+                // outPath is UTF-8; u8path opens it with the wide API so a
+                // non-ASCII user folder works (a plain narrow path would be
+                // read in the ANSI code page).
+                std::ofstream o(std::filesystem::u8path(outPath), std::ios::binary | std::ios::trunc);
                 if (o) {
                     uint64_t got = 0;
                     bool cancelled = false;

@@ -15,7 +15,7 @@ CXXFLAGS=${CXXFLAGS:-"-O2"}
 CXXFLAGS="$CXXFLAGS -std=c++17 -Isrc -Ithird_party -Ithird_party/imgui"
 
 CORE="Bhd5 Bnd3 C4110Header Detect Dcx DisplayConfig Download Extract ExePatch ExePatchTable
-      Installer LaunchLinux LinuxLauncher NameHash SteamShortcut NamelistData Sha256 Unpacker Update VanillaManifest"
+      Installer LaunchLinux LinuxLauncher NameHash Release SteamShortcut NamelistData Sha256 Unpacker Update VanillaManifest"
 IMGUI="imgui imgui_draw imgui_tables imgui_widgets backends/imgui_impl_sdl3 backends/imgui_impl_sdlrenderer3"
 SDL_CFLAGS=$(pkg-config --cflags sdl3)
 SDL_LIBS=$(pkg-config --libs sdl3)
