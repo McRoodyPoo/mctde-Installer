@@ -11,7 +11,8 @@
 namespace mctde {
 
 // Version baked into this build. Bump on every installer release and keep the
-// "mctde-installer=" line in latest.txt in sync.
+// "mctde-installer=" line in latest.txt in sync. The native Linux build is
+// released separately (tag "linux-vX.Y.Z") and tracks "mctde-installer-linux=".
 extern const char* const kInstallerVersion;
 
 // Fetch latest.txt and return the advertised installer version ("" on any

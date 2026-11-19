@@ -30,9 +30,13 @@ static const char* kManifestUrl =
 static const char* kInstallerExeUrl =
     "https://github.com/McRoodyPoo/mctde-Installer/releases/latest/download/mctde-Installer.exe";
 #else
-// The native Linux build ships as an AppImage attached to the same releases.
-static const char* kInstallerAppImageUrl =
-    "https://github.com/McRoodyPoo/mctde-Installer/releases/latest/download/mctde-Installer-x86_64.AppImage";
+// The native Linux build is versioned and released on its own: latest.txt's
+// "mctde-installer-linux=X.Y.Z" names the newest one, published as the release
+// tagged "linux-vX.Y.Z" with the AppImage attached.
+static const char* kAppImageUrlPrefix =
+    "https://github.com/McRoodyPoo/mctde-Installer/releases/download/linux-v";
+static const char* kAppImageName = "mctde-Installer-x86_64.AppImage";
+static std::string g_latestLinux;   // set by fetchLatestInstallerVersion()
 #endif
 
 static std::string trim(const std::string& s) {
@@ -57,8 +61,10 @@ static std::wstring selfPathW() {
 }
 #endif
 
-// Pull "mctde-installer=" (case-insensitive, '_' treated as '-') out of the
-// key=value manifest. Matches the lenient format the in-game checker parses.
+// Pull this build's installer version out of the key=value manifest:
+// "mctde-installer=" on Windows, "mctde-installer-linux=" on native Linux
+// (case-insensitive, '_' treated as '-'). Matches the lenient format the
+// in-game checker parses.
 static std::string parseInstallerVersion(const std::string& text) {
     std::stringstream ss(text);
     std::string line;
@@ -70,7 +76,11 @@ static std::string parseInstallerVersion(const std::string& text) {
         if (eq == std::string::npos) continue;
         std::string key = trim(line.substr(0, eq));
         for (char& c : key) { c = (char)tolower((unsigned char)c); if (c == '_') c = '-'; }
+#ifdef _WIN32
         if (key == "mctde-installer" || key == "mctdeinstaller")
+#else
+        if (key == "mctde-installer-linux" || key == "mctdeinstaller-linux")
+#endif
             return trim(line.substr(eq + 1));
     }
     return "";
@@ -111,7 +121,12 @@ std::string fetchLatestInstallerVersion() {
     std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     f.close();
     std::filesystem::remove(tmp, ec);
+#ifdef _WIN32
     return parseInstallerVersion(text);
+#else
+    g_latestLinux = parseInstallerVersion(text);
+    return g_latestLinux;
+#endif
 }
 
 #ifdef _WIN32
@@ -199,7 +214,9 @@ bool selfUpdate(std::string& err, const ProgressFn& progress) {
     const std::string newP = self + ".new";
 
     // 1. Download the new AppImage alongside ourselves.
-    if (!downloadUrl(kInstallerAppImageUrl, newP, err, progress)) {
+    if (g_latestLinux.empty()) { err = "no Linux version advertised"; return false; }
+    const std::string url = kAppImageUrlPrefix + g_latestLinux + "/" + kAppImageName;
+    if (!downloadUrl(url, newP, err, progress)) {
         ::unlink(newP.c_str());
         return false;
     }

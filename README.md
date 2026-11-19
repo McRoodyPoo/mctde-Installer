@@ -83,7 +83,8 @@ data/           generated namelist(s)
 
 ### Native (recommended)
 
-Download `mctde-Installer-x86_64.AppImage` from the latest release, make it
+Download `mctde-Installer-x86_64.AppImage` from the latest Linux release
+(tagged `linux-v...`), make it
 executable and run it (from your file manager, or `chmod +x` then
 `./mctde-Installer-x86_64.AppImage`). It's the same installer with a native
 Linux window; the game, mctde-Link and the launcher still run through Proton.
@@ -103,6 +104,10 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
 - **Playing:** for the Steam copy, **Play** starts the game through Steam. For any
   other copy, add its `mctde_launcher.exe` to Steam as a non-Steam game and turn
   on Proton under Properties > Compatibility.
+- **Releases and updates:** the Linux build has its own releases, tagged
+  `linux-vX.Y.Z`, separate from the Windows ones. On start it checks the
+  `mctde-installer-linux=` line in mctde-Link's `latest.txt` and, if a newer
+  version is listed, offers to replace the AppImage with that release's.
 - **Compatibility:** the AppImage needs a glibc at least as new as the machine it
   was built on (currently Arch Linux). It runs on Arch and Arch-based distros; on
   older distros, build from source (below) or use the Windows exe under Wine.
