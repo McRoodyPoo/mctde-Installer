@@ -1,15 +1,25 @@
 #include "Download.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#else
+#include <curl/curl.h>
+#include <filesystem>
+#include <mutex>
+#endif
 
+#include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <vector>
 
 namespace mctde {
+
+#ifdef _WIN32
 
 static std::wstring widen(const std::string& s) {
     if (s.empty()) return L"";
@@ -22,9 +32,9 @@ static std::wstring widen(const std::string& s) {
 // Core: GET a URL, follow redirects, stream the body to outPath. Reports the
 // HTTP status and whether the response was text/html (used to spot Drive's
 // confirm/quota interstitial vs the actual file).
-static bool httpGetToFile(const std::wstring& url, const std::string& outPath,
-                          const ProgressFn& progress,
-                          DWORD& statusOut, bool& isHtmlOut, std::string& err) {
+static bool httpGetToFileW(const std::wstring& url, const std::string& outPath,
+                           const ProgressFn& progress,
+                           long& statusOut, bool& isHtmlOut, std::string& err) {
     statusOut = 0;
     isHtmlOut = false;
 
@@ -106,10 +116,105 @@ static bool httpGetToFile(const std::wstring& url, const std::string& outPath,
     return ok;
 }
 
+static bool httpGetToFile(const std::string& url, const std::string& outPath,
+                          const ProgressFn& progress,
+                          long& statusOut, bool& isHtmlOut, std::string& err) {
+    return httpGetToFileW(widen(url), outPath, progress, statusOut, isHtmlOut, err);
+}
+
+#else  // ---- native Linux: libcurl ----
+
+// libcurl's own CA path is fixed at build time (e.g. Arch's), which may not
+// exist on the distro running the AppImage, so pick the first bundle present.
+static const char* caBundle() {
+    static const char* const candidates[] = {
+        "/etc/ssl/certs/ca-certificates.crt",   // Arch, Debian/Ubuntu, SteamOS
+        "/etc/pki/tls/certs/ca-bundle.crt",     // Fedora/RHEL
+        "/etc/ssl/ca-bundle.pem",               // openSUSE
+        "/etc/ssl/cert.pem",                    // Alpine, others
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    };
+    for (const char* c : candidates) {
+        std::error_code ec;
+        if (std::filesystem::exists(c, ec)) return c;
+    }
+    return nullptr;   // fall back to libcurl's compiled-in default
+}
+
+struct CurlSink {
+    std::FILE* f = nullptr;
+    const ProgressFn* progress = nullptr;
+    bool cancelled = false;
+};
+
+static size_t curlWrite(char* ptr, size_t size, size_t nmemb, void* user) {
+    CurlSink* s = static_cast<CurlSink*>(user);
+    return std::fwrite(ptr, size, nmemb, s->f) * size;
+}
+
+static int curlProgress(void* user, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t) {
+    CurlSink* s = static_cast<CurlSink*>(user);
+    if (s->progress && *s->progress && dlnow > 0 &&
+        !(*s->progress)((uint64_t)dlnow, (uint64_t)(dltotal > 0 ? dltotal : 0))) {
+        s->cancelled = true;
+        return 1;   // abort the transfer
+    }
+    return 0;
+}
+
+static bool httpGetToFile(const std::string& url, const std::string& outPath,
+                          const ProgressFn& progress,
+                          long& statusOut, bool& isHtmlOut, std::string& err) {
+    static std::once_flag init;
+    std::call_once(init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    statusOut = 0;
+    isHtmlOut = false;
+
+    CurlSink sink;
+    sink.f = std::fopen(outPath.c_str(), "wb");
+    if (!sink.f) { err = "cannot write " + outPath; return false; }
+    sink.progress = &progress;
+
+    CURL* c = curl_easy_init();
+    if (!c) { std::fclose(sink.f); err = "curl init failed"; return false; }
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_MAXREDIRS, 10L);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "mctde-installer/1.0");
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);    // give up if stalled
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 30L);    // for 30 s
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curlWrite);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &sink);
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, curlProgress);
+    curl_easy_setopt(c, CURLOPT_XFERINFODATA, &sink);
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    if (const char* ca = caBundle()) curl_easy_setopt(c, CURLOPT_CAINFO, ca);
+
+    CURLcode rc = curl_easy_perform(c);
+    long status = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
+    char* ctype = nullptr;
+    curl_easy_getinfo(c, CURLINFO_CONTENT_TYPE, &ctype);
+    if (ctype && std::strstr(ctype, "text/html")) isHtmlOut = true;
+    curl_off_t got = 0;
+    curl_easy_getinfo(c, CURLINFO_SIZE_DOWNLOAD_T, &got);
+    curl_easy_cleanup(c);
+    std::fclose(sink.f);
+
+    statusOut = status;
+    if (sink.cancelled) { err = "cancelled"; return false; }
+    if (rc != CURLE_OK) { err = curl_easy_strerror(rc); return false; }
+    if (status != 200) { err = "HTTP " + std::to_string(status); return false; }
+    return got > 0;
+}
+
+#endif
+
 bool downloadUrl(const std::string& url, const std::string& outPath,
                  std::string& err, const ProgressFn& progress) {
-    DWORD status = 0; bool html = false;
-    return httpGetToFile(widen(url), outPath, progress, status, html, err);
+    long status = 0; bool html = false;
+    return httpGetToFile(url, outPath, progress, status, html, err);
 }
 
 // Pull the value of an HTML hidden-input by name from the Drive confirm form.
@@ -129,10 +234,10 @@ bool downloadGoogleDrive(const std::string& fileId, const std::string& outPath,
                          std::string& err, const ProgressFn& progress) {
     const std::string base = "https://drive.usercontent.google.com/download?id=" + fileId +
                              "&export=download";
-    DWORD status = 0; bool html = false;
+    long status = 0; bool html = false;
 
     // First try with confirm=t, which serves most large files directly.
-    if (!httpGetToFile(widen(base + "&confirm=t"), outPath, progress, status, html, err)) {
+    if (!httpGetToFile(base + "&confirm=t", outPath, progress, status, html, err)) {
         if (err == "cancelled") return false;  // test-mode early cancel
         // fall through to parse-the-form path below if we at least got a page
     }
@@ -152,7 +257,7 @@ bool downloadGoogleDrive(const std::string& fileId, const std::string& outPath,
     if (!confirm.empty()) url2 += "&confirm=" + confirm;
     if (!uuid.empty())    url2 += "&uuid=" + uuid;
 
-    if (!httpGetToFile(widen(url2), outPath, progress, status, html, err)) return false;
+    if (!httpGetToFile(url2, outPath, progress, status, html, err)) return false;
     if (html) { err = "Google Drive still returned a page (quota?)"; return false; }
     return status == 200;
 }

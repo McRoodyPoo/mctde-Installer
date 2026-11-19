@@ -1,11 +1,13 @@
 #include "DisplayConfig.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <shlobj.h>
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#endif
 
 #include <cctype>
 #include <filesystem>
@@ -28,14 +30,19 @@ static const IniEdit kEdits[] = {
     { "DisplaySettingFilter", "Antialiasing", "0" },  // DSFix supplies its own AA
 };
 
-// %LOCALAPPDATA% as a wide path, so a non-ASCII Windows username still resolves.
-static std::wstring localAppData() {
+// %LOCALAPPDATA% as a path, so a non-ASCII Windows username still resolves.
+// Empty on native Linux (there is no Windows profile of our own there).
+static fs::path localAppData() {
+#ifdef _WIN32
     PWSTR p = nullptr;
     std::wstring out;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &p)) && p)
         out = p;
     if (p) CoTaskMemFree(p);
-    return out;
+    return fs::path(out);
+#else
+    return fs::path();
+#endif
 }
 
 static std::string trim(const std::string& s) {
@@ -170,13 +177,13 @@ static bool writeAtomic(const fs::path& target, const std::string& bytes, std::s
 }
 
 bool ensureDisplayConfig(std::string& message) {
-    std::wstring lad = localAppData();
+    fs::path lad = localAppData();
     if (lad.empty()) { message = "could not resolve %LOCALAPPDATA%"; return false; }
-    return ensureDisplayConfigIn(fs::path(lad).string(), message);
+    return ensureDisplayConfigIn(lad.string(), message);
 }
 
 bool ensureDisplayConfigIn(const std::string& localAppDataDir, std::string& message) {
-    fs::path ini = fs::path(localAppDataDir) / L"NBGI" / L"DarkSouls" / L"DarkSouls.ini";
+    fs::path ini = fs::path(localAppDataDir) / "NBGI" / "DarkSouls" / "DarkSouls.ini";
     std::error_code ec;
 
     std::vector<std::string> lines;

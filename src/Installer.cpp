@@ -6,9 +6,11 @@
 #include "Extract.h"
 #include "Unpacker.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
 #include <chrono>
 #include <filesystem>
@@ -47,9 +49,17 @@ static fs::path uniqueBackupPath(const fs::path& base) {
 // it is ~8x faster than libstdc++'s fs::copy_file (which moves data in small
 // chunks: ~6 MB/s vs ~46 MB/s measured on an NTFS disk).
 static bool copyOneFile(const fs::path& src, const fs::path& dst, std::string& err) {
+#ifdef _WIN32
     if (CopyFileW(src.c_str(), dst.c_str(), FALSE)) return true;
     err = "Windows error " + std::to_string(GetLastError());
     return false;
+#else
+    // libstdc++ uses copy_file_range / sendfile here: kernel-side, fast.
+    std::error_code ec;
+    if (fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) return true;
+    err = ec.message();
+    return false;
+#endif
 }
 
 // Recursively copy the contents of `src` into `dst` (created as needed), one
@@ -298,14 +308,23 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         //    no in-game AA) so DSFix works cleanly. Best-effort: a locked or
         //    unwritable ini shouldn't fail an otherwise-complete install, so log it.
         {
+#ifdef _WIN32
             std::string dm;
             if (ensureDisplayConfig(dm))
                 step("Display: " + dm + ".", -1);
             else
                 step("Warning: could not apply display settings (" + dm + ").", -1);
-            // Under Wine/Proton the game usually runs in Steam's own prefix for
+#endif
+            // On Linux (native or Wine) the game runs in Steam's Proton prefix for
             // PTDE, which reads its own DarkSouls.ini: apply the same tweaks there.
-            for (const std::string& lad : protonGameLocalAppData()) {
+            const std::vector<std::string> prefixes = protonGameLocalAppData();
+#ifndef _WIN32
+            if (prefixes.empty())
+                step("Note: no Proton prefix for Dark Souls found yet. Launch the game once "
+                     "through Steam, then run the installer again to set windowed mode / no AA "
+                     "for DSFix (or set them in the game's options).", -1);
+#endif
+            for (const std::string& lad : prefixes) {
                 std::string pm;
                 if (ensureDisplayConfigIn(lad, pm))
                     step("Display (Proton prefix " + lad + "): " + pm + ".", -1);

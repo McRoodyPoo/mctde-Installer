@@ -28,6 +28,39 @@ static bool safeRelPath(const char* raw, std::string& rel) {
     return true;
 }
 
+#ifndef _WIN32
+// On a case-sensitive filesystem, map each component of `rel` onto an entry
+// that already exists under `base` with different case ("Chr" -> "chr"), so the
+// mod's files land in the unpacked game's folders instead of creating a second,
+// differently-cased copy the game (via Wine's case-insensitive lookup) might
+// not pick. Components that don't exist yet are kept as given.
+static fs::path resolveCaseInsensitive(const fs::path& base, const std::string& rel) {
+    fs::path cur = base;
+    size_t i = 0;
+    while (i <= rel.size()) {
+        size_t j = rel.find('/', i);
+        std::string comp = rel.substr(i, j == std::string::npos ? std::string::npos : j - i);
+        if (!comp.empty()) {
+            std::error_code ec;
+            if (!fs::exists(cur / comp, ec)) {
+                std::string want = comp;
+                for (char& c : want) c = char(std::tolower((unsigned char)c));
+                for (fs::directory_iterator it(cur, ec), end; !ec && it != end; it.increment(ec)) {
+                    std::string have = it->path().filename().string();
+                    std::string low = have;
+                    for (char& c : low) c = char(std::tolower((unsigned char)c));
+                    if (low == want) { comp = have; break; }
+                }
+            }
+            cur /= comp;
+        }
+        if (j == std::string::npos) break;
+        i = j + 1;
+    }
+    return cur;
+}
+#endif
+
 // If every entry lives under one shared top-level folder (e.g. a zip that wraps
 // its contents in "mctde 0.88 (STABLE)/"), return that prefix to strip so the
 // contents land directly in outDir. "" if there's no single common root.
@@ -69,7 +102,11 @@ ExtractStats extractZip(const std::string& zipPath, const std::string& outDir,
         if (!safeRelPath(s.m_filename, rel)) { ++st.errors; continue; }
         if (!strip.empty() && rel.rfind(strip, 0) == 0) rel.erase(0, strip.size());
         if (rel.empty()) continue;  // the stripped root directory entry itself
+#ifdef _WIN32
         fs::path out = fs::path(outDir) / fs::path(rel);
+#else
+        fs::path out = resolveCaseInsensitive(fs::path(outDir), rel);
+#endif
 
         std::error_code ec;
         if (mz_zip_reader_is_file_a_directory(&zip, i)) {

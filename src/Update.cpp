@@ -1,9 +1,14 @@
 #include "Update.h"
 #include "Download.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <cctype>
 #include <cstdlib>
@@ -15,14 +20,20 @@
 namespace mctde {
 
 // Bump this on every installer release, in lockstep with latest.txt.
-const char* const kInstallerVersion = "0.1.10";
+const char* const kInstallerVersion = "0.1.11";
 
 // Version comes from the central latest.txt (same manifest the in-game updater
 // reads). The installer exe itself is attached to each mctde-Installer release.
 static const char* kManifestUrl =
     "https://raw.githubusercontent.com/McRoodyPoo/mctde-Link/main/latest.txt";
+#ifdef _WIN32
 static const char* kInstallerExeUrl =
     "https://github.com/McRoodyPoo/mctde-Installer/releases/latest/download/mctde-Installer.exe";
+#else
+// The native Linux build ships as an AppImage attached to the same releases.
+static const char* kInstallerAppImageUrl =
+    "https://github.com/McRoodyPoo/mctde-Installer/releases/latest/download/mctde-Installer-x86_64.AppImage";
+#endif
 
 static std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \r\n\t");
@@ -30,6 +41,7 @@ static std::string trim(const std::string& s) {
     return a == std::string::npos ? "" : s.substr(a, b - a + 1);
 }
 
+#ifdef _WIN32
 static std::string narrow(const std::wstring& w) {
     if (w.empty()) return "";
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -43,6 +55,7 @@ static std::wstring selfPathW() {
     GetModuleFileNameW(nullptr, p, MAX_PATH);
     return p;
 }
+#endif
 
 // Pull "mctde-installer=" (case-insensitive, '_' treated as '-') out of the
 // key=value manifest. Matches the lenient format the in-game checker parses.
@@ -88,18 +101,20 @@ bool isNewer(const std::string& latest, const std::string& current) {
 }
 
 std::string fetchLatestInstallerVersion() {
-    wchar_t tmpDir[MAX_PATH] = {0};
-    if (!GetTempPathW(MAX_PATH, tmpDir)) return "";
-    std::wstring tmp = std::wstring(tmpDir) + L"mctde_latest.txt";
+    std::error_code ec;
+    std::filesystem::path tmp = std::filesystem::temp_directory_path(ec);
+    if (ec) return "";
+    tmp /= "mctde_latest.txt";
     std::string err;
-    if (!downloadUrl(kManifestUrl, narrow(tmp), err)) return "";
-    std::ifstream f{std::filesystem::path(tmp)};
+    if (!downloadUrl(kManifestUrl, tmp.string(), err)) return "";
+    std::ifstream f{tmp};
     std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     f.close();
-    DeleteFileW(tmp.c_str());
+    std::filesystem::remove(tmp, ec);
     return parseInstallerVersion(text);
 }
 
+#ifdef _WIN32
 void cleanupOldSelf() {
     std::wstring oldP = selfPathW() + L".old";
     for (int i = 0; i < 10; ++i) {
@@ -167,5 +182,64 @@ bool selfUpdate(std::string& err, const ProgressFn& progress) {
     CloseHandle(pi.hProcess);
     return true;
 }
+
+#else
+// Linux: the new AppImage is renamed straight over the running one (allowed on
+// Unix), so nothing is left behind.
+void cleanupOldSelf() {}
+
+bool selfUpdate(std::string& err, const ProgressFn& progress) {
+    // Only the AppImage can replace itself; a hand-built binary just carries on.
+    const char* appimage = std::getenv("APPIMAGE");
+    if (!appimage || !*appimage) {
+        err = "not running from the AppImage; download the new release manually";
+        return false;
+    }
+    const std::string self = appimage;
+    const std::string newP = self + ".new";
+
+    // 1. Download the new AppImage alongside ourselves.
+    if (!downloadUrl(kInstallerAppImageUrl, newP, err, progress)) {
+        ::unlink(newP.c_str());
+        return false;
+    }
+
+    // 2. Sanity-check it's an ELF executable of a plausible size.
+    {
+        std::ifstream f(newP, std::ios::binary | std::ios::ate);
+        std::streamoff sz = f ? (std::streamoff)f.tellg() : 0;
+        char magic[4] = {0};
+        if (f) { f.seekg(0); f.read(magic, 4); }
+        f.close();
+        if (sz < 500000 || magic[0] != 0x7f || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F') {
+            err = "downloaded installer was not a valid AppImage";
+            ::unlink(newP.c_str());
+            return false;
+        }
+    }
+
+    // 3. Make it executable and rename it over ourselves (atomic; the running
+    //    process keeps its already-mounted copy).
+    ::chmod(newP.c_str(), 0755);
+    if (::rename(newP.c_str(), self.c_str()) != 0) {
+        err = "could not put the new installer in place";
+        ::unlink(newP.c_str());
+        return false;
+    }
+
+    // 4. Relaunch it detached; the caller exits so the new instance takes over.
+    pid_t pid = ::fork();
+    if (pid == 0) {
+        ::setsid();
+        ::execl(self.c_str(), self.c_str(), (char*)nullptr);
+        ::_exit(127);
+    }
+    if (pid < 0) {
+        err = "updated, but could not relaunch automatically";
+        return false;
+    }
+    return true;
+}
+#endif
 
 } // namespace mctde
