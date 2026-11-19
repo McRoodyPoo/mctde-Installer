@@ -172,8 +172,11 @@ static bool writeAtomic(const fs::path& target, const std::string& bytes, std::s
 bool ensureDisplayConfig(std::string& message) {
     std::wstring lad = localAppData();
     if (lad.empty()) { message = "could not resolve %LOCALAPPDATA%"; return false; }
+    return ensureDisplayConfigIn(fs::path(lad).string(), message);
+}
 
-    fs::path ini = fs::path(lad) / L"NBGI" / L"DarkSouls" / L"DarkSouls.ini";
+bool ensureDisplayConfigIn(const std::string& localAppDataDir, std::string& message) {
+    fs::path ini = fs::path(localAppDataDir) / L"NBGI" / L"DarkSouls" / L"DarkSouls.ini";
     std::error_code ec;
 
     std::vector<std::string> lines;

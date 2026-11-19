@@ -16,4 +16,8 @@ namespace mctde {
 // "already set"); sets `message` to a summary of what changed, or the error.
 bool ensureDisplayConfig(std::string& message);
 
+// Same, for the DarkSouls.ini under another %LOCALAPPDATA% folder (e.g. the
+// game's own Proton prefix, which is not the prefix the installer runs in).
+bool ensureDisplayConfigIn(const std::string& localAppDataDir, std::string& message);
+
 } // namespace mctde

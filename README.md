@@ -92,6 +92,10 @@ Every renamed copy in a library's `steamapps/common` that holds
 folder, `/mnt`, `/media` and `/run/media`, then the non-system top-level folders
 of `/` (skipping `/proc`, `/usr`, `/etc` and the like).
 
+The DSFix display tweaks (windowed, no in-game AA) are written to
+`DarkSouls.ini` in the installer's own prefix and also in Steam's Proton prefix
+for PTDE (`steamapps/compatdata/211420`), which is where the game reads them.
+
 If nothing is found, the start of the log (and `mctde-installer detectall`)
 shows what detection saw: Wine version, `HOME`/`WINEHOMEDIR`, the homes, and
 each Steam root and library it checked.

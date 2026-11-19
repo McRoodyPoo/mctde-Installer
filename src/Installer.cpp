@@ -303,6 +303,15 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
                 step("Display: " + dm + ".", -1);
             else
                 step("Warning: could not apply display settings (" + dm + ").", -1);
+            // Under Wine/Proton the game usually runs in Steam's own prefix for
+            // PTDE, which reads its own DarkSouls.ini: apply the same tweaks there.
+            for (const std::string& lad : protonGameLocalAppData()) {
+                std::string pm;
+                if (ensureDisplayConfigIn(lad, pm))
+                    step("Display (Proton prefix " + lad + "): " + pm + ".", -1);
+                else
+                    step("Warning: could not apply display settings in " + lad + " (" + pm + ").", -1);
+            }
         }
 
         step("Done!", 100);

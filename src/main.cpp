@@ -10,6 +10,7 @@
 #include "Bhd5.h"
 #include "Bnd3.h"
 #include "Detect.h"
+#include "DisplayConfig.h"
 #include "Dcx.h"
 #include "Download.h"
 #include "Extract.h"
@@ -44,6 +45,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::printf("usage:\n");
         std::printf("  mctde-installer detect\n");
+        std::printf("  mctde-installer displayconfig [localAppDataDir]\n");
         std::printf("  mctde-installer install <dataDir> [namelist]\n");
         std::printf("  mctde-installer unpack  <dataDir> <out> [namelist]\n");
         std::printf("  mctde-installer patchexe <inExe> <outExe>\n");
@@ -130,6 +132,15 @@ int main(int argc, char** argv) {
             });
             std::printf("found %d install(s)\n", n);
             return 0;
+        }
+
+        if (cmd == "displayconfig") {
+            // displayconfig [localAppDataDir] : apply the DSFix display tweaks to
+            // DarkSouls.ini under that folder (default: this prefix's %LOCALAPPDATA%)
+            std::string msg;
+            bool ok = argc >= 3 ? ensureDisplayConfigIn(argv[2], msg) : ensureDisplayConfig(msg);
+            std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
+            return ok ? 0 : 2;
         }
 
         if (cmd == "detect") {

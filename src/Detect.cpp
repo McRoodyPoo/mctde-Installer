@@ -129,11 +129,35 @@ static std::string wineHomeDirToDos(const std::string& nt) {
     return "";
 }
 
-// Two paths naming the same existing directory (symlinks, case, slashes).
+// Two paths naming the same existing file or folder (symlinks, case, slashes).
+// Compares volume serial + file index like fs::equivalent, plus size and
+// timestamps: under Wine every Unix path reports volume serial 0 and the file
+// index is the inode, so two different folders on different disks can share
+// an index. A symlink resolves to the very same inode, so its times match too.
+static bool sameFile(const fs::path& a, const fs::path& b) {
+    auto info = [](const fs::path& p, BY_HANDLE_FILE_INFORMATION& i) {
+        HANDLE h = CreateFileW(p.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return false;
+        BOOL ok = GetFileInformationByHandle(h, &i);
+        CloseHandle(h);
+        return ok != FALSE;
+    };
+    BY_HANDLE_FILE_INFORMATION x{}, y{};
+    if (!info(a, x) || !info(b, y)) return false;
+    auto eqTime = [](const FILETIME& m, const FILETIME& n) {
+        return m.dwLowDateTime == n.dwLowDateTime && m.dwHighDateTime == n.dwHighDateTime;
+    };
+    return x.dwVolumeSerialNumber == y.dwVolumeSerialNumber &&
+           x.nFileIndexHigh == y.nFileIndexHigh && x.nFileIndexLow == y.nFileIndexLow &&
+           x.nFileSizeHigh == y.nFileSizeHigh && x.nFileSizeLow == y.nFileSizeLow &&
+           eqTime(x.ftCreationTime, y.ftCreationTime) &&
+           eqTime(x.ftLastWriteTime, y.ftLastWriteTime);
+}
+
 static bool sameDir(const std::string& a, const std::string& b) {
     if (lower(a) == lower(b)) return true;
-    std::error_code ec;
-    return fs::equivalent(fs::path(a), fs::path(b), ec);
+    return sameFile(fs::path(a), fs::path(b));
 }
 
 // The Unix home directory(ies), as DOS paths, most trustworthy first:
@@ -304,6 +328,22 @@ static std::vector<std::pair<fs::path, int>> linuxScanRoots() {
     return roots;
 }
 
+std::vector<std::string> protonGameLocalAppData() {
+    std::vector<std::string> out;
+    if (!isWine()) return out;
+    for (const std::string& lib : allLibraryPaths()) {
+        fs::path lad = fs::path(lib) / "steamapps" / "compatdata" / "211420" / "pfx" /
+                       "drive_c" / "users" / "steamuser" / "AppData" / "Local";
+        std::error_code ec;
+        if (!fs::is_directory(lad, ec)) continue;
+        std::string p = lad.string();
+        bool dup = false;
+        for (const std::string& q : out) if (sameDir(q, p)) { dup = true; break; }
+        if (!dup) out.push_back(p);
+    }
+    return out;
+}
+
 std::vector<std::string> detectDiagnostics() {
     std::vector<std::string> out;
     auto yn = [](const std::string& p, const char* sub = nullptr) {
@@ -350,6 +390,8 @@ std::vector<std::string> detectDiagnostics() {
                                          std::to_string(linuxSteamRootCandidates().size()) +
                                          " locations)");
     }
+    for (const std::string& lad : protonGameLocalAppData())
+        out.push_back("Proton prefix (PTDE): " + lad);
     const char* sub = "steamapps\\common\\Dark Souls Prepare to Die Edition\\DATA\\DARKSOULS.exe";
     for (const std::string& lib : allLibraryPaths()) {
         std::error_code ec;
@@ -510,8 +552,7 @@ void findAllDataDirs(const std::function<void(const GameInstall&)>& onFound) {
         // Same install reached by another path (e.g. Linux ~/.steam/steam is a
         // symlink to ~/.local/share/Steam): compare the exe's file identity.
         for (const std::string& prev : seenDirs) {
-            std::error_code ec;
-            if (fs::equivalent(fs::path(dir) / "DARKSOULS.exe", fs::path(prev) / "DARKSOULS.exe", ec))
+            if (sameFile(fs::path(dir) / "DARKSOULS.exe", fs::path(prev) / "DARKSOULS.exe"))
                 return;
         }
         seenDirs.push_back(dir);
