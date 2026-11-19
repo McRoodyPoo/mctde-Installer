@@ -101,8 +101,16 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
 - **Case-sensitive filesystems:** archives are unpacked in a fixed order (so the
   result is byte-identical to a Windows install) and the mod's files are merged
   into the existing folders whatever their case.
-- **Playing:** after an install, **Play** starts that copy's
-  `mctde_launcher.exe` through your Steam Proton (the one that created PTDE's
+- **Linux launcher:** besides the Windows `mctde_launcher.exe`, the install puts
+  the native Linux mctde launcher (`mctde-launcher` + `mctde-launcher-cli`) in
+  the `DATA` folder. It comes from mctde-Launcher's `linux` branch: its
+  `latest.txt` names the exact release file and its SHA-256, which the installer
+  checks (only files from mctde-Launcher's own releases are accepted). If no
+  Linux launcher is published yet, the install carries on with just the Windows
+  one. CLI: `mctde-installer install-linux-launcher <DATA dir>`.
+- **Playing:** after an install, **Play** opens the native Linux launcher if
+  it's installed (or runs its CLI's `play` where Qt 6 isn't available).
+  Otherwise it starts that copy's `mctde_launcher.exe` through your Steam Proton (the one that created PTDE's
   prefix, else Proton Experimental, else the newest installed), in PTDE's Proton
   prefix. Steam must be running (it's started if not); it shows the game as
   Spacewar (app 480). Proton's output goes to `~/.cache/mctde-installer/proton.log`.

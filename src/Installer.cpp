@@ -5,6 +5,9 @@
 #include "ExePatch.h"
 #include "Extract.h"
 #include "Unpacker.h"
+#ifndef _WIN32
+#include "LinuxLauncher.h"
+#endif
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -296,6 +299,16 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
             message = "launcher download failed: " + err;
             return InstallResult::Failed;
         }
+#ifndef _WIN32
+        // 4b. Linux: the native launcher from mctde-Launcher's linux branch, next
+        //     to the Windows one. Optional: if it isn't published or can't be
+        //     fetched, the Windows launcher above still works through Proton.
+        {
+            std::string lm;
+            if (installLinuxLauncher(dataDir, lm, step)) step(lm + ".", -1);
+            else step("Linux launcher skipped: " + lm + ". The Windows launcher will be used through Proton.", -1);
+        }
+#endif
 
         // 5. steam_appid.txt (exactly "480", Spacewar) so the game launches under
         //    the mod's Steam setup. Written last, into the DATA folder.

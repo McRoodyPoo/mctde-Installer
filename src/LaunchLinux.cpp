@@ -1,5 +1,6 @@
 #include "LaunchLinux.h"
 #include "Detect.h"
+#include "LinuxLauncher.h"
 
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -158,6 +159,35 @@ bool launchGameLinux(const std::string& dataDir, std::string& message,
 
     fs::path data(dataDir);
     std::error_code ec;
+
+    // The native Linux launcher, when installed, does it all itself (Steam,
+    // PTDE's Proton + runtime, DSCM, settings, mctde-Link's launcher guard):
+    // open its window, or run its CLI's play where Qt 6 isn't available.
+    if (std::string native = linuxLauncherIn(dataDir); !native.empty()) {
+        std::vector<std::string> argv;
+        if (qt6Available()) {
+            argv = {native};
+            say("Opening the mctde launcher...");
+        } else {
+            fs::path cli = data / "mctde-launcher-cli";
+            if (::access(cli.c_str(), X_OK) == 0) {
+                argv = {cli.string(), "play"};
+                if (wait) argv.push_back("--wait");
+                say("Qt 6 not found; starting the game with mctde-launcher-cli...");
+            }
+        }
+        if (!argv.empty()) {
+            int rc = 0;
+            if (!runProcess(argv, data.string(), {}, "", /*detach=*/!wait, &rc)) {
+                message = "could not start " + argv[0];
+                return false;
+            }
+            message = wait ? "mctde launcher exited (code " + std::to_string(rc) + ")"
+                           : "Started the mctde launcher (native Linux)";
+            return true;
+        }
+    }
+
     fs::path exe = data / "mctde_launcher.exe";
     if (!fs::exists(exe, ec)) exe = data / "DARKSOULS.exe";
     if (!fs::exists(exe, ec)) { message = "no mctde_launcher.exe or DARKSOULS.exe in " + dataDir; return false; }

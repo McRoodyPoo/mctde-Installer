@@ -14,6 +14,7 @@
 #ifndef _WIN32
 #include "LaunchLinux.h"
 #include "SteamShortcut.h"
+#include "LinuxLauncher.h"
 #endif
 #include "Dcx.h"
 #include "Download.h"
@@ -53,6 +54,7 @@ int main(int argc, char** argv) {
 #ifndef _WIN32
         std::printf("  mctde-installer play <dataDir>   (start an installed copy through Proton)\n");
         std::printf("  mctde-installer add-to-steam <dataDir>   (add it to Steam as a non-Steam game)\n");
+        std::printf("  mctde-installer install-linux-launcher <dataDir>   (native Linux mctde launcher)\n");
 #endif
         std::printf("  mctde-installer install <dataDir> [namelist]\n");
         std::printf("  mctde-installer unpack  <dataDir> <out> [namelist]\n");
@@ -151,6 +153,15 @@ int main(int argc, char** argv) {
             // shows the game as running only while we're alive).
             bool ok = launchGameLinux(argv[2], msg, [](const std::string& s) { std::printf("%s\n", s.c_str()); },
                                       /*wait=*/true);
+            std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
+            return ok ? 0 : 2;
+        }
+        if (cmd == "install-linux-launcher") {
+            // install-linux-launcher <dataDir> : fetch the native Linux launcher
+            if (argc < 3) { std::printf("usage: install-linux-launcher <dataDir>\n"); return 1; }
+            std::string msg;
+            bool ok = installLinuxLauncher(argv[2], msg,
+                [](const std::string& s, int) { std::printf("%s\n", s.c_str()); });
             std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
             return ok ? 0 : 2;
         }

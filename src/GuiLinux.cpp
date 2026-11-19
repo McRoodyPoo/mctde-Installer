@@ -17,6 +17,7 @@
 #include "Installer.h"
 #include "LaunchLinux.h"
 #include "SteamShortcut.h"
+#include "LinuxLauncher.h"
 #include "Update.h"
 
 #include <unistd.h>
@@ -302,7 +303,9 @@ static void drainEvents() {
             g_pct = e.ok ? 100 : -1;
             g_done = e.ok;
             if (e.ok) {
-                logAppend("Click Play to start Dark Souls (through Proton; Steam shows it as Spacewar).");
+                logAppend(linuxLauncherIn(g_selDir).empty()
+                    ? "Click Play to start Dark Souls (through Proton; Steam shows it as Spacewar)."
+                    : "Click Play to open the mctde launcher.");
                 openModal(Modal::AddToSteam);
             }
             break;
