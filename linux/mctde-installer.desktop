@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=mctde Installer
+Comment=Install the mctde mod for Dark Souls: Prepare to Die Edition
+Exec=mctde-installer-gui
+Icon=mctde-installer
+Categories=Game;
+Terminal=false
+StartupWMClass=mctde-installer
