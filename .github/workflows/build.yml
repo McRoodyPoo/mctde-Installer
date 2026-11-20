@@ -11,6 +11,9 @@ on:
       - 'third_party/**'
       - 'gui.rc'
       - 'gui.manifest'
+      - 'linux/**'
+      - 'make_appimage.sh'
+      - 'build_linux.sh'
       - '*.ico'
       - '*.bmp'
       - '*.png'
@@ -48,4 +51,22 @@ jobs:
         with:
           name: mctde-Installer-win64
           path: build/mctde-Installer.exe
+          if-no-files-found: error
+
+  # Portable Linux AppImage, built in Valve's Steam Runtime "sniper" SDK container (glibc 2.31) via
+  # make_appimage.sh / linux/build_in_container.sh, so it runs on SteamOS, Ubuntu, Fedora, Arch, ...
+  appimage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build portable AppImage
+        env:
+          ENGINE: docker
+        run: ./make_appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mctde-Installer-AppImage
+          path: build/linux/mctde-Installer-x86_64.AppImage
           if-no-files-found: error
