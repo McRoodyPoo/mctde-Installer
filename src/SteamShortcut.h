@@ -30,4 +30,31 @@ bool addToSteam(const std::string& dataDir, std::string& message);
 // Steam is no longer running, then write the shortcut.
 bool addSteamShortcutAfterSteamExits(const std::string& dataDir, std::string& message);
 
+// ---- PTDE's own Play button (localconfig.vdf LaunchOptions) ----
+// On Linux, Steam's Play button for the real PTDE entry runs DARKSOULS.exe through
+// Proton, and mctde-Link's launcher guard then reopens the *Windows* launcher there.
+// For the Steam library copy, point PTDE's launch options at the native launcher:
+//   [ -x "<DATA>/mctde-launcher" ] && exec "<DATA>/mctde-launcher"; %command%
+// Steam runs launch options through /bin/sh, so Play opens the native launcher,
+// and falls back to the normal game if the launcher is gone (e.g. after a restore).
+// Launch options the player set themselves are left alone. localconfig.vdf is only
+// written while Steam is closed (Steam rewrites it from memory on exit).
+
+// True if dataDir is the copy Steam itself launches (steamapps/common/Dark Souls
+// Prepare to Die Edition/DATA in a Steam library).
+bool isSteamLibraryCopy(const std::string& dataDir);
+
+// The launch options string for this copy.
+std::string steamPlayLaunchOptions(const std::string& dataDir);
+
+// Write PTDE's LaunchOptions now. Steam must not be running.
+// MCTDE_LOCALCONFIG_VDF=<file> redirects the write (testing).
+bool setSteamPlayNow(const std::string& dataDir, std::string& message);
+
+// Now if Steam is closed, else a background worker that writes it once Steam exits.
+bool setSteamPlay(const std::string& dataDir, std::string& message);
+
+// The worker body ("steam-play <DATA> --wait-for-steam-exit").
+bool setSteamPlayAfterSteamExits(const std::string& dataDir, std::string& message);
+
 } // namespace mctde

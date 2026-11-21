@@ -323,4 +323,194 @@ bool addToSteam(const std::string& dataDir, std::string& message) {
     return true;
 }
 
+
+// ---- PTDE launch options (text KeyValues, localconfig.vdf) ----
+static const char* const kPtdeAppId = "211420";
+
+bool isSteamLibraryCopy(const std::string& dataDir) {
+    fs::path data = fs::path(dataDir).lexically_normal();
+    if (data.filename().empty()) data = data.parent_path();
+    fs::path game = data.parent_path(), common = game.parent_path();
+    return data.filename() == "DATA" && game.filename() == "Dark Souls Prepare to Die Edition" &&
+           common.filename() == "common" && common.parent_path().filename() == "steamapps";
+}
+
+std::string steamPlayLaunchOptions(const std::string& dataDir) {
+    std::string l = (fs::path(dataDir) / "mctde-launcher").string();
+    return "[ -x " + quote(l) + " ] && exec " + quote(l) + "; %command%";
+}
+
+// One token of a text VDF: a quoted or bare string, or a brace. [begin, end) is
+// its span in the file (quotes included), so values can be replaced in place.
+struct KvTok { char kind; std::string s; size_t begin, end; };   // kind: 's', '{', '}'
+
+static bool kvTokenize(const std::string& t, std::vector<KvTok>& out) {
+    size_t i = 0, n = t.size();
+    while (i < n) {
+        char ch = t[i];
+        if (std::isspace((unsigned char)ch)) { ++i; continue; }
+        if (ch == '/' && i + 1 < n && t[i + 1] == '/') { while (i < n && t[i] != '\n') ++i; continue; }
+        if (ch == '{' || ch == '}') { out.push_back({ch, "", i, i + 1}); ++i; continue; }
+        if (ch == '"') {
+            size_t b = i++;
+            std::string s;
+            while (i < n && t[i] != '"') {
+                if (t[i] == '\\' && i + 1 < n) {
+                    char e = t[++i];
+                    s += e == 'n' ? '\n' : e == 't' ? '\t' : e;
+                } else s += t[i];
+                ++i;
+            }
+            if (i >= n) return false;
+            out.push_back({'s', s, b, ++i});
+            continue;
+        }
+        size_t b = i;
+        while (i < n && !std::isspace((unsigned char)t[i]) && t[i] != '"' && t[i] != '{' && t[i] != '}') ++i;
+        out.push_back({'s', t.substr(b, i - b), b, i});
+    }
+    return true;
+}
+
+// Index of the '}' closing the object whose '{' is at tok[open].
+static size_t kvClose(const std::vector<KvTok>& tok, size_t open) {
+    int depth = 0;
+    for (size_t i = open; i < tok.size(); ++i) {
+        if (tok[i].kind == '{') ++depth;
+        else if (tok[i].kind == '}' && --depth == 0) return i;
+    }
+    return std::string::npos;
+}
+
+// In the object spanning tok(open, close), find direct child `key` (case-insensitive).
+// Returns the index of its value token (a string, or the '{' of an object), or npos.
+static size_t kvChild(const std::vector<KvTok>& tok, size_t open, size_t close, const std::string& key) {
+    auto ieq = [](const std::string& a, const std::string& b) {
+        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(),
+            [](char x, char y) { return std::tolower((unsigned char)x) == std::tolower((unsigned char)y); });
+    };
+    size_t i = open + 1;
+    while (i < close) {
+        if (tok[i].kind != 's' || i + 1 >= close) return std::string::npos;
+        size_t v = i + 1;
+        if (ieq(tok[i].s, key)) return v;
+        if (tok[v].kind == '{') { size_t c = kvClose(tok, v); if (c == std::string::npos) return c; i = c + 1; }
+        else i = v + 1;
+    }
+    return std::string::npos;
+}
+
+static std::string kvEscape(const std::string& s) {
+    std::string o;
+    for (char ch : s) { if (ch == '"' || ch == '\\') o += '\\'; o += ch; }
+    return o;
+}
+
+// The line indentation (tabs) in front of position p.
+static std::string kvIndentAt(const std::string& t, size_t p) {
+    size_t ls = t.rfind('\n', p == 0 ? 0 : p - 1);
+    ls = ls == std::string::npos ? 0 : ls + 1;
+    size_t e = ls;
+    while (e < t.size() && (t[e] == '\t' || t[e] == ' ')) ++e;
+    return t.substr(ls, e - ls);
+}
+
+bool setSteamPlayNow(const std::string& dataDir, std::string& message) {
+    const char* over = std::getenv("MCTDE_LOCALCONFIG_VDF");
+    if (steamRunning() && !over) { message = "Steam must be closed before changing PTDE's launch options"; return false; }
+    fs::path vdf;
+    if (over) vdf = over;
+    else {
+        std::string err;
+        fs::path cfg = steamUserConfigDir(err);
+        if (cfg.empty()) { message = err; return false; }
+        vdf = cfg / "localconfig.vdf";
+    }
+    std::string t;
+    {
+        std::ifstream f(vdf, std::ios::binary);
+        if (!f) { message = "could not read " + vdf.string(); return false; }
+        t.assign((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    }
+    std::vector<KvTok> tok;
+    if (!kvTokenize(t, tok) || tok.size() < 2 || tok[1].kind != '{') {
+        message = "could not read " + vdf.string() + " (left unchanged)";
+        return false;
+    }
+    // UserLocalConfigStore > Software > Valve > Steam > apps
+    size_t open = 1, close = kvClose(tok, 1);
+    for (const char* k : {"Software", "Valve", "Steam", "apps"}) {
+        size_t v = close == std::string::npos ? close : kvChild(tok, open, close, k);
+        if (v == std::string::npos || tok[v].kind != '{') {
+            message = "PTDE's Steam settings weren't found in " + vdf.string() + ". Start the game from Steam once, then reinstall";
+            return false;
+        }
+        open = v; close = kvClose(tok, v);
+    }
+    const std::string want = steamPlayLaunchOptions(dataDir);
+    const std::string val = "\"" + kvEscape(want) + "\"";
+    std::string out;
+    size_t app = kvChild(tok, open, close, kPtdeAppId);
+    if (app != std::string::npos && tok[app].kind == '{') {
+        size_t appClose = kvClose(tok, app);
+        size_t lo = kvChild(tok, app, appClose, "LaunchOptions");
+        if (lo != std::string::npos && tok[lo].kind == 's') {
+            const std::string& cur = tok[lo].s;
+            if (cur == want) { message = "Steam's Play button for PTDE already opens the mctde launcher"; return true; }
+            if (!cur.empty() && cur.find("mctde-launcher") == std::string::npos) {
+                message = "PTDE already has your own Steam launch options (" + cur + "), so they were left as they are";
+                return false;
+            }
+            out = t.substr(0, tok[lo].begin) + val + t.substr(tok[lo].end);
+        } else {
+            std::string ind = kvIndentAt(t, tok[appClose].begin);
+            out = t.substr(0, tok[appClose].begin) + "\t\"LaunchOptions\"\t\t" + val + "\n" + ind + t.substr(tok[appClose].begin);
+        }
+    } else {
+        std::string ind = kvIndentAt(t, tok[close].begin);
+        out = t.substr(0, tok[close].begin) + "\t\"" + kPtdeAppId + "\"\n" + ind + "\t{\n" + ind +
+              "\t\t\"LaunchOptions\"\t\t" + val + "\n" + ind + "\t}\n" + ind + t.substr(tok[close].begin);
+    }
+
+    std::error_code ec;
+    fs::path backup = vdf; backup += ".mctde-backup";
+    if (!fs::exists(backup, ec)) fs::copy_file(vdf, backup, ec);
+    fs::path tmp = vdf; tmp += ".mctde-tmp";
+    {
+        std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+        o.write(out.data(), (std::streamsize)out.size());
+        if (!o) { message = "could not write " + tmp.string(); return false; }
+    }
+    fs::permissions(tmp, fs::status(vdf, ec).permissions(), ec);
+    fs::rename(tmp, vdf, ec);
+    if (ec) { message = "could not replace " + vdf.string() + ": " + ec.message(); return false; }
+    message = "Steam's Play button for PTDE now opens the mctde launcher";
+    return true;
+}
+
+bool setSteamPlayAfterSteamExits(const std::string& dataDir, std::string& message) {
+    while (steamRunning()) std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::seconds(3));   // let Steam finish writing its files
+    return setSteamPlayNow(dataDir, message);
+}
+
+bool setSteamPlay(const std::string& dataDir, std::string& message) {
+    if (!steamRunning() || std::getenv("MCTDE_LOCALCONFIG_VDF")) return setSteamPlayNow(dataDir, message);
+    std::string launcher = stableLauncherPath();
+    if (launcher.empty() || launcher.rfind("/tmp/.mount_", 0) == 0) {
+        message = "could not determine a stable path to the installer";
+        return false;
+    }
+    std::error_code ec;
+    fs::path logDir = fs::path(homeDir()) / ".cache" / "mctde-installer";
+    fs::create_directories(logDir, ec);
+    std::string logFile = fs::is_directory(logDir, ec) ? (logDir / "steam-play.log").string() : "";
+    if (!runProcess({launcher, "steam-play", dataDir, "--wait-for-steam-exit"}, "", {}, logFile, /*detach=*/true)) {
+        message = "could not start the Steam launch-options worker";
+        return false;
+    }
+    message = "Steam is running, so Steam's Play button for PTDE will open the mctde launcher after you restart Steam";
+    return true;
+}
+
 } // namespace mctde

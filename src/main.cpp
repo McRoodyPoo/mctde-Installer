@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
 #ifndef _WIN32
         std::printf("  mctde-installer play <dataDir>   (start an installed copy through Proton)\n");
         std::printf("  mctde-installer add-to-steam <dataDir>   (add it to Steam as a non-Steam game)\n");
+        std::printf("  mctde-installer steam-play <dataDir>     (Steam's PTDE Play button opens the Linux launcher)\n");
         std::printf("  mctde-installer install-linux-launcher <dataDir>   (native Linux mctde launcher)\n");
 #endif
         std::printf("  mctde-installer install <dataDir> [namelist]\n");
@@ -162,6 +163,16 @@ int main(int argc, char** argv) {
             std::string msg;
             bool ok = installLinuxLauncher(argv[2], msg,
                 [](const std::string& s, int) { std::printf("%s\n", s.c_str()); });
+            std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
+            return ok ? 0 : 2;
+        }
+        if (cmd == "steam-play") {
+            // steam-play <dataDir> [--wait-for-steam-exit] : PTDE's Play button opens the native launcher
+            if (argc < 3) { std::printf("usage: steam-play <dataDir> [--wait-for-steam-exit]\n"); return 1; }
+            std::string msg;
+            bool ok = (argc >= 4 && std::string(argv[3]) == "--wait-for-steam-exit")
+                          ? setSteamPlayAfterSteamExits(argv[2], msg)
+                          : setSteamPlay(argv[2], msg);
             std::printf("%s%s\n", ok ? "" : "failed: ", msg.c_str());
             return ok ? 0 : 2;
         }

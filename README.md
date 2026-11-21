@@ -131,6 +131,14 @@ Linux window; the game, mctde-Link and the launcher still run through Proton.
   up as `shortcuts.vdf.mctde-backup`. From the command line:
   `mctde-installer add-to-steam <DATA dir>`. Keep the AppImage where it is
   afterwards; the shortcut points at it.
+- **Steam's own Play button:** for the Steam library copy, the installer sets
+  PTDE's Steam launch options so Play opens the native Linux launcher instead of
+  starting `DARKSOULS.exe` through Proton (whose launcher guard would reopen the
+  Windows launcher). If the launcher is missing, Play starts the game as usual.
+  Launch options you set yourself are left alone. Like `shortcuts.vdf`,
+  `localconfig.vdf` is only changed while Steam is closed (backup:
+  `localconfig.vdf.mctde-backup`). From the command line:
+  `mctde-installer steam-play <DATA dir>`.
 - **Releases and updates:** Windows and Linux share one version number and one
   release per version (see [Releases](#releases)). On start the installer checks
   the `mctde-installer=` line in mctde-Link's `latest.txt` and, if a newer

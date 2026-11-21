@@ -9,6 +9,7 @@
 #include "Unpacker.h"
 #ifndef _WIN32
 #include "LinuxLauncher.h"
+#include "SteamShortcut.h"
 #endif
 
 #ifdef _WIN32
@@ -317,7 +318,16 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         //     launcher above still works through Proton.
         {
             std::string lm;
-            if (installLinuxLauncher(dataDir, lm, step)) step(lm + ".", -1);
+            if (installLinuxLauncher(dataDir, lm, step)) {
+                step(lm + ".", -1);
+                // Steam's own Play button for this copy should open the native launcher,
+                // not DARKSOULS.exe (whose launcher guard would reopen the Windows one).
+                if (isSteamLibraryCopy(dataDir)) {
+                    std::string sm;
+                    bool ok = setSteamPlay(dataDir, sm);
+                    step((ok ? sm : "Steam's Play button left unchanged: " + sm) + ".", -1);
+                }
+            }
             else step("Linux launcher skipped: " + lm + ". The Windows launcher will be used through Proton.", -1);
         }
 #endif
