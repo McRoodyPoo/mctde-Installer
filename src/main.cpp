@@ -221,6 +221,17 @@ int main(int argc, char** argv) {
             return r == InstallResult::Failed ? 2 : 0;
         }
 
+        if (cmd == "dxvk") {
+            // dxvk <dataDir> : deploy the embedded DXVK (d3d9_dxvk.dll + dxvk.conf) and set
+            // RealD3D9Path in mctde-link.ini. Windows only; a no-op under Wine/Proton and on Linux.
+            if (argc < 3) { std::printf("usage: dxvk <dataDir>\n"); return 1; }
+            std::string msg;
+            InstallResult r = deployDxvk(argv[2], msg,
+                [](const std::string& s, int pct) { std::printf("[%4d%%] %s\n", pct, s.c_str()); });
+            std::printf("%s\n", msg.c_str());
+            return r == InstallResult::Failed ? 2 : 0;
+        }
+
         if (cmd == "install") {
             // install <dataDir> [namelist]
             if (argc < 3) { std::printf("usage: install <dataDir> [namelist]\n"); return 1; }

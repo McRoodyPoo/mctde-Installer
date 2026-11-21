@@ -1,0 +1,11 @@
+// DXVK payload embedded into the Windows installer (GUI and CLI alike). Kept in its own
+// .rc so both the GUI build (which also compiles gui.rc) and the CLI build (which otherwise
+// has no resources) can link the same bytes. Not used by the Linux build. See src/DxvkAssets.cpp.
+#include "src/gui_resource.h"
+
+// DXVK's 32-bit d3d9, renamed so it never takes mctde-Link's own d3d9.dll slot.
+// mctde-Link loads it as the "real" d3d9 when [Compatibility] RealD3D9Path points here.
+IDR_DXVK_DLL  RCDATA "assets/d3d9_dxvk.dll"
+
+// Default DXVK tuning (vsync/frame-pacing). Written next to the game only if absent.
+IDR_DXVK_CONF RCDATA "assets/dxvk.conf"

@@ -2,6 +2,7 @@
 #include "Detect.h"
 #include "DisplayConfig.h"
 #include "Download.h"
+#include "DxvkAssets.h"
 #include "ExePatch.h"
 #include "Extract.h"
 #include "Release.h"
@@ -321,6 +322,16 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         }
 #endif
 
+        // 4c. DXVK (Vulkan) -> DATA. Windows only: drops d3d9_dxvk.dll + a default
+        //     dxvk.conf and points mctde-Link at it (Vulkan on by default). A no-op on
+        //     Linux/Proton (Proton has its own DXVK). Best-effort: a DXVK write problem
+        //     shouldn't fail an otherwise-complete install.
+        {
+            std::string dm;
+            if (deployDxvk(dataDir, dm, progress) == InstallResult::Failed)
+                step("Warning: could not deploy DXVK (" + dm + ").", -1);
+        }
+
         // 5. steam_appid.txt (exactly "480", Spacewar) so the game launches under
         //    the mod's Steam setup. Written last, into the DATA folder.
         {
@@ -364,6 +375,85 @@ InstallResult fullInstall(const std::string& dataDir, const std::string& namelis
         message = std::string("install failed: ") + e.what();
         return InstallResult::Failed;
     }
+}
+
+#ifdef _WIN32
+// True when the Windows installer is itself running under Wine / Proton (Linux). ntdll
+// exports wine_get_version only there. On Linux the game already renders on Vulkan via
+// Proton's own DXVK, so bundling our Windows DXVK is redundant (and double-DXVK can glitch).
+static bool runningUnderWine() {
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    return nt && GetProcAddress(nt, "wine_get_version") != nullptr;
+}
+#endif
+
+InstallResult deployDxvk(const std::string& dataDir, std::string& message,
+                         const InstallProgress& progress) {
+#ifndef _WIN32
+    // Native Linux build: never ship DXVK; Proton provides its own.
+    (void)dataDir; (void)progress;
+    message = "DXVK not deployed on Linux (Proton provides its own DXVK)";
+    return InstallResult::Done;
+#else
+    auto step = [&](const std::string& s, int pct) { if (progress) progress(s, pct); };
+    fs::path data(dataDir);
+    std::error_code ec;
+    if (!fs::exists(data, ec)) {
+        message = "DATA folder not found: " + dataDir;
+        return InstallResult::Failed;
+    }
+
+    // Windows installer running under Wine/Proton: same as native Linux -- skip DXVK.
+    if (runningUnderWine()) {
+        message = "skipped DXVK (running under Wine/Proton; Proton provides its own DXVK)";
+        step("DXVK: skipped on Linux/Proton (Proton has its own DXVK).", -1);
+        return InstallResult::Done;
+    }
+
+    // 1. DXVK's 32-bit d3d9, dropped as d3d9_dxvk.dll (never as d3d9.dll -- that's
+    //    mctde-Link's slot). Always refreshed to the build we ship.
+    const uint8_t* dll = nullptr; size_t dllLen = 0;
+    if (!dxvkDllBytes(&dll, &dllLen) || dllLen == 0) {
+        message = "embedded DXVK payload missing (built without dxvk_assets.res?)";
+        return InstallResult::Failed;
+    }
+    fs::path dllPath = data / "d3d9_dxvk.dll";
+    {
+        std::ofstream o(dllPath, std::ios::binary | std::ios::trunc);
+        if (!o) { message = "cannot write " + dllPath.string(); return InstallResult::Failed; }
+        o.write(reinterpret_cast<const char*>(dll), (std::streamsize)dllLen);
+        if (!o)  { message = "write failed for " + dllPath.string(); return InstallResult::Failed; }
+    }
+    step("DXVK: wrote d3d9_dxvk.dll (" + std::to_string(dllLen / 1024) + " KB).", -1);
+
+    // 2. dxvk.conf -- only if the player doesn't already have one, so a tuned conf is
+    //    never clobbered (same best-effort spirit as the DarkSouls.ini tweaks).
+    fs::path confPath = data / "dxvk.conf";
+    if (!fs::exists(confPath, ec)) {
+        const uint8_t* cf = nullptr; size_t cfLen = 0;
+        if (dxvkConfBytes(&cf, &cfLen) && cfLen) {
+            std::ofstream o(confPath, std::ios::binary | std::ios::trunc);
+            if (o) o.write(reinterpret_cast<const char*>(cf), (std::streamsize)cfLen);
+        }
+        step("DXVK: wrote default dxvk.conf.", -1);
+    } else {
+        step("DXVK: kept the existing dxvk.conf.", -1);
+    }
+
+    // 3. Point mctde-Link at DXVK so a fresh install runs on Vulkan by default. An
+    //    absolute path into this DATA folder is correct on any machine. The launcher's
+    //    Vulkan tab flips this key off/on later. Best-effort.
+    fs::path ini = data / "mctde-link.ini";
+    std::wstring wIni = ini.wstring();
+    std::wstring wDll = dllPath.wstring();
+    if (WritePrivateProfileStringW(L"Compatibility", L"RealD3D9Path", wDll.c_str(), wIni.c_str()))
+        step("DXVK: enabled Vulkan (RealD3D9Path set in mctde-link.ini).", -1);
+    else
+        step("DXVK: note - could not set RealD3D9Path (enable it from the launcher).", -1);
+
+    message = "DXVK deployed (Vulkan on by default).";
+    return InstallResult::Done;
+#endif
 }
 
 InstallResult restoreFromBackup(const std::string& backupDir,

@@ -46,6 +46,15 @@ InstallResult installFlow(const std::string& dataDir,
                           std::string& message,
                           const InstallProgress& progress = {});
 
+// Deploy DXVK (Vulkan) into a DATA folder (Windows only). Writes the embedded DXVK d3d9
+// (as `d3d9_dxvk.dll`, always refreshed), writes a default `dxvk.conf` only if absent, and
+// points mctde-Link at it by setting `[Compatibility] RealD3D9Path=<DATA>\d3d9_dxvk.dll` in
+// mctde-link.ini, so a fresh install runs on Vulkan by default. On Linux this is a no-op
+// (Proton provides its own DXVK), and it is also skipped when the installer runs under
+// Wine/Proton. Idempotent; returns Done on success (or skip), Failed on a write error.
+InstallResult deployDxvk(const std::string& dataDir, std::string& message,
+                         const InstallProgress& progress = {});
+
 // Restore a backup folder over the live DATA folder. `backupDir` is one of the
 // installer's sibling backups (see findBackups); it must contain DARKSOULS.exe.
 // The current DATA is moved aside first and only deleted once the backup has been
