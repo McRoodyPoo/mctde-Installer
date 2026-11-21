@@ -22,7 +22,7 @@ namespace mctde {
 
 // One version for both platforms. Bump on every installer release, in lockstep
 // with latest.txt's "mctde-installer=" line.
-const char* const kInstallerVersion = "0.4.0";
+const char* const kInstallerVersion = "0.5.0";
 
 // Each version is one GitHub release tagged "v<version>" carrying a zip per
 // platform (see Release.h). The self-update takes the zip for the OS it was
